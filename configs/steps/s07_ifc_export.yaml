@@ -1,0 +1,5 @@
+ifc_version: IFC4
+project_name: GSS_BIM
+building_name: Building
+default_wall_thickness: 0.2
+default_slab_thickness: 0.3

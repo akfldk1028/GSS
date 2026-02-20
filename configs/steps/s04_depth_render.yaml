@@ -1,0 +1,4 @@
+num_views: 400
+render_normals: true
+render_resolution_scale: 1.0
+view_selection: uniform

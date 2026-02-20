@@ -1,0 +1,5 @@
+target_fps: 2.0
+max_frames: 2000
+output_format: png
+blur_threshold: 100.0
+resize_width: null

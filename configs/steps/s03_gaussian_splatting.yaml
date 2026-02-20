@@ -1,0 +1,5 @@
+method: 2dgs
+iterations: 30000
+learning_rate: 0.00016
+densify_until: 15000
+sh_degree: 3

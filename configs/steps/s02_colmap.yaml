@@ -1,0 +1,6 @@
+use_gpu: true
+matcher: sequential
+match_window: 10
+single_camera: true
+camera_model: OPENCV
+max_num_features: 8192

@@ -1,0 +1,6 @@
+max_planes: 30
+distance_threshold: 0.02
+min_inliers: 500
+ransac_iterations: 1000
+angle_threshold: 15.0
+simplify_tolerance: 0.05

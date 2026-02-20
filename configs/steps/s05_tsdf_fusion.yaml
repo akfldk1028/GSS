@@ -1,0 +1,5 @@
+voxel_size: 0.006
+sdf_trunc: 0.04
+depth_trunc: 5.0
+depth_scale: 1.0
+use_gpu: false
