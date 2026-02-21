@@ -112,7 +112,7 @@ def extract_zip(zip_path: Path, extract_to: Path, subdir: Optional[str] = None) 
 
 def validate_dataset(target_dir: Path, config: dict) -> bool:
     """Validate that the dataset has expected structure."""
-    console.print(f"[cyan]Validating dataset structure...[/cyan]")
+    console.print("[cyan]Validating dataset structure...[/cyan]")
 
     if not target_dir.exists():
         console.print(f"[red]X[/red] Target directory does not exist: {target_dir}")
@@ -149,7 +149,7 @@ def validate_dataset(target_dir: Path, config: dict) -> bool:
         images = [f for f in dir_path.iterdir() if f.suffix.lower() in image_extensions]
         console.print(f"[green]OK[/green] Found directory: {expected_dir} ({len(images)} images)")
 
-    console.print(f"[green]OK[/green] Dataset validation passed")
+    console.print("[green]OK[/green] Dataset validation passed")
     return True
 
 
@@ -170,12 +170,12 @@ def download(
     # Check if already downloaded
     if target_dir.exists() and not force:
         console.print(f"[yellow]Dataset already exists at {target_dir}[/yellow]")
-        console.print(f"[yellow]Use --force to re-download[/yellow]")
+        console.print("[yellow]Use --force to re-download[/yellow]")
         if validate_dataset(target_dir, config):
-            console.print(f"[green]OK[/green] Dataset is valid and ready to use")
+            console.print("[green]OK[/green] Dataset is valid and ready to use")
             return
         else:
-            console.print(f"[yellow]Validation failed, proceeding with download...[/yellow]")
+            console.print("[yellow]Validation failed, proceeding with download...[/yellow]")
 
     # Handle datasets without URL
     if config["url"] is None:
@@ -195,7 +195,7 @@ def download(
 
         # Clean up existing directory
         if target_dir.exists():
-            console.print(f"[yellow]Removing existing directory...[/yellow]")
+            console.print("[yellow]Removing existing directory...[/yellow]")
             shutil.rmtree(target_dir)
 
         # Extract
@@ -207,7 +207,7 @@ def download(
             console.print(f"[green]OK[/green] Successfully downloaded and validated {config['name']}")
             console.print(f"[green]OK[/green] Dataset ready at: {target_dir}")
         else:
-            console.print(f"[red]X[/red] Dataset validation failed")
+            console.print("[red]X[/red] Dataset validation failed")
             raise typer.Exit(1)
 
     except requests.RequestException as e:
