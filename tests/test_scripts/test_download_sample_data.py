@@ -438,3 +438,90 @@ def test_download_integration_mock(tmp_path: Path, mock_zip_file: Path):
     assert (target_dir / "train").exists(), "Train directory should exist"
     assert (target_dir / "transforms_train.json").exists(), "Transform file should exist"
     logger.info("✓ Download integration test passed")
+
+
+@pytest.mark.e2e
+def test_download_lego_integration(tmp_path: Path, mock_zip_file: Path):
+    """
+    End-to-end integration test for lego dataset download workflow.
+
+    Tests complete download, extraction, and validation pipeline with real
+    implementations. Network requests are mocked to avoid external dependencies.
+    """
+    data_root = tmp_path / "integration_test"
+    data_root.mkdir(parents=True, exist_ok=True)
+
+    # ========== Step 01: Download Dataset (Mocked Network) ==========
+    logger.info("Running Integration: Download Lego Dataset")
+    lego_config = DATASETS["lego"]
+    zip_path = data_root / "lego.zip"
+
+    # Mock network request but use real download_file implementation
+    with patch("scripts.download_sample_data.requests.get") as mock_get:
+        mock_response = Mock()
+        mock_content = mock_zip_file.read_bytes()
+        mock_response.headers = {"content-length": str(len(mock_content))}
+        mock_response.iter_content = Mock(return_value=[mock_content])
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        download_file(lego_config["url"], zip_path)
+
+    # Verify download output
+    assert zip_path.exists(), "Downloaded zip file should exist"
+    assert zip_path.stat().st_size > 0, "Downloaded file should have content"
+    logger.info(f"Downloaded {zip_path.stat().st_size} bytes to {zip_path.name}")
+
+    # ========== Step 02: Extract Dataset (Real Implementation) ==========
+    logger.info("Extracting dataset archive")
+    target_dir = data_root / "lego"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    extract_zip(zip_path, target_dir, subdir=lego_config["extract_subdir"])
+
+    # Verify extraction output
+    assert target_dir.exists(), "Target directory should exist after extraction"
+    assert (target_dir / "train").exists(), "Train directory should be extracted"
+    assert (target_dir / "val").exists(), "Val directory should be extracted"
+    assert (target_dir / "test").exists(), "Test directory should be extracted"
+    logger.info(f"Extracted dataset to {target_dir}")
+
+    # ========== Step 03: Validate Dataset Structure (Real Implementation) ==========
+    logger.info("Validating dataset structure")
+    validation_result = validate_dataset(target_dir, lego_config)
+
+    # Verify validation output
+    assert validation_result is True, "Dataset validation should pass"
+    logger.info("Dataset validation passed")
+
+    # ========== Verify Complete Pipeline Connectivity ==========
+    # Download output → Extract input
+    assert zip_path.exists(), "Zip file should exist for extraction"
+
+    # Extract output → Validate input
+    assert target_dir.exists(), "Target directory should exist for validation"
+
+    # Validate expected structure
+    for expected_file in lego_config["expected_files"]:
+        file_path = target_dir / expected_file
+        assert file_path.exists(), f"Expected file should exist: {expected_file}"
+        logger.info(f"✓ Verified file: {expected_file}")
+
+    for expected_dir in lego_config["expected_dirs"]:
+        dir_path = target_dir / expected_dir
+        assert dir_path.exists(), f"Expected directory should exist: {expected_dir}"
+        # Count images
+        image_extensions = {".png", ".jpg", ".jpeg"}
+        images = [f for f in dir_path.iterdir() if f.suffix.lower() in image_extensions]
+        assert len(images) > 0, f"Expected directory should contain images: {expected_dir}"
+        logger.info(f"✓ Verified directory: {expected_dir} ({len(images)} images)")
+
+    logger.info("✓ E2E Lego dataset integration test passed")
+    logger.info(f"Integration test artifacts in: {data_root}")
+
+    # Final assertions
+    assert zip_path.exists(), "Download should produce zip file"
+    assert target_dir.exists(), "Extraction should produce target directory"
+    assert validation_result is True, "Validation should pass"
+
+    logger.info("✓ All integration tests passed")
