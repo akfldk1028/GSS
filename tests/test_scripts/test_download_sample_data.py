@@ -91,9 +91,54 @@ def mock_zip_file(tmp_path: Path, mock_lego_dataset: Path) -> Path:
     return zip_path
 
 
-def test_download_file_regular_url(tmp_path: Path):
-    """Test download_file with a regular HTTP URL."""
+@pytest.mark.parametrize(
+    "url,is_google_drive",
+    [
+        ("http://example.com/test.zip", False),
+        ("https://example.org/data.zip", False),
+        ("https://drive.google.com/file/d/123456/view", True),
+        ("https://drive.usercontent.google.com/download?id=123456", True),
+    ],
+)
+def test_download_file(tmp_path: Path, url: str, is_google_drive: bool):
+    """Test download_file with various URL types (regular HTTP and Google Drive)."""
     output_path = tmp_path / "test_download.zip"
+    mock_content = b"fake_zip_content"
+
+    if is_google_drive:
+        # Mock gdown.download for Google Drive URLs
+        with patch("scripts.download_sample_data.gdown.download") as mock_gdown:
+            # Simulate gdown creating the file
+            mock_gdown.side_effect = lambda u, p, quiet, fuzzy: output_path.write_bytes(mock_content)
+
+            download_file(url, output_path)
+
+            # Verify gdown was called correctly
+            mock_gdown.assert_called_once_with(url, str(output_path), quiet=False, fuzzy=True)
+            assert output_path.exists(), "Downloaded file should exist"
+            logger.info(f"✓ download_file Google Drive test passed: {url}")
+    else:
+        # Mock requests.get for regular HTTP URLs
+        with patch("scripts.download_sample_data.requests.get") as mock_get:
+            mock_response = Mock()
+            mock_response.headers = {"content-length": str(len(mock_content))}
+            mock_response.iter_content = Mock(return_value=[mock_content])
+            mock_response.raise_for_status = Mock()
+            mock_get.return_value = mock_response
+
+            download_file(url, output_path)
+
+            # Verify file was created
+            assert output_path.exists(), "Downloaded file should exist"
+            assert output_path.read_bytes() == mock_content, "Downloaded content should match"
+            mock_get.assert_called_once_with(url, stream=True)
+            mock_response.raise_for_status.assert_called_once()
+            logger.info(f"✓ download_file HTTP test passed: {url}")
+
+
+def test_download_file_creates_parent_directory(tmp_path: Path):
+    """Test that download_file creates parent directories if they don't exist."""
+    nested_path = tmp_path / "nested" / "deep" / "dir" / "test.zip"
     mock_url = "http://example.com/test.zip"
     mock_content = b"fake_zip_content"
 
@@ -105,29 +150,57 @@ def test_download_file_regular_url(tmp_path: Path):
         mock_response.raise_for_status = Mock()
         mock_get.return_value = mock_response
 
-        download_file(mock_url, output_path)
+        download_file(mock_url, nested_path)
 
-        # Verify file was created
-        assert output_path.exists(), "Downloaded file should exist"
-        assert output_path.read_bytes() == mock_content, "Downloaded content should match"
-        mock_get.assert_called_once_with(mock_url, stream=True)
-        logger.info(f"✓ download_file test passed: {output_path}")
+        # Verify parent directory was created
+        assert nested_path.parent.exists(), "Parent directory should be created"
+        assert nested_path.exists(), "Downloaded file should exist"
+        logger.info("✓ download_file parent directory creation test passed")
 
 
-def test_download_file_google_drive_url(tmp_path: Path):
-    """Test download_file with a Google Drive URL."""
+def test_download_file_handles_http_error(tmp_path: Path):
+    """Test that download_file properly handles HTTP errors."""
     output_path = tmp_path / "test_download.zip"
-    mock_url = "https://drive.google.com/file/d/123456/view"
+    mock_url = "http://example.com/notfound.zip"
 
-    # Mock gdown.download
-    with patch("scripts.download_sample_data.gdown.download") as mock_gdown:
-        mock_gdown.return_value = str(output_path)
+    # Mock requests.get to raise an error
+    with patch("scripts.download_sample_data.requests.get") as mock_get:
+        mock_response = Mock()
+        mock_response.raise_for_status.side_effect = requests.HTTPError("404 Not Found")
+        mock_get.return_value = mock_response
+
+        # Verify that the error is raised
+        with pytest.raises(requests.HTTPError):
+            download_file(mock_url, output_path)
+
+        logger.info("✓ download_file HTTP error handling test passed")
+
+
+def test_download_file_chunked_download(tmp_path: Path):
+    """Test that download_file properly handles chunked downloads."""
+    output_path = tmp_path / "test_download.zip"
+    mock_url = "http://example.com/largefile.zip"
+
+    # Create multiple chunks
+    chunk1 = b"chunk1_data"
+    chunk2 = b"chunk2_data"
+    chunk3 = b"chunk3_data"
+    expected_content = chunk1 + chunk2 + chunk3
+
+    # Mock requests.get
+    with patch("scripts.download_sample_data.requests.get") as mock_get:
+        mock_response = Mock()
+        mock_response.headers = {"content-length": str(len(expected_content))}
+        mock_response.iter_content = Mock(return_value=[chunk1, chunk2, chunk3])
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
 
         download_file(mock_url, output_path)
 
-        # Verify gdown was called correctly
-        mock_gdown.assert_called_once_with(mock_url, str(output_path), quiet=False, fuzzy=True)
-        logger.info("✓ download_file Google Drive test passed")
+        # Verify all chunks were written
+        assert output_path.exists(), "Downloaded file should exist"
+        assert output_path.read_bytes() == expected_content, "All chunks should be written"
+        logger.info("✓ download_file chunked download test passed")
 
 
 def test_extract_zip_basic(tmp_path: Path, mock_zip_file: Path):
