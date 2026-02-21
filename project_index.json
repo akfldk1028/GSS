@@ -1,0 +1,79 @@
+{
+  "project_type": "single",
+  "project_name": "GSS (3D Gaussian Splatting to BIM Pipeline)",
+  "description": "Video to 3D Gaussian Splatting to BIM (IFC) automatic conversion pipeline",
+  "services": {
+    "pipeline": {
+      "path": ".",
+      "tech_stack": ["python", "pytest", "opencv", "numpy", "pydantic"],
+      "port": null,
+      "dev_command": null,
+      "test_command": "pytest",
+      "test_command_with_coverage": "pytest --cov=src/gss --cov-report=term-missing",
+      "e2e_test_command": "pytest -m e2e -v",
+      "install_command": "pip install -e ."
+    }
+  },
+  "infrastructure": {
+    "docker": false,
+    "database": null,
+    "ci_cd": null
+  },
+  "conventions": {
+    "linter": "ruff",
+    "formatter": null,
+    "testing": "pytest",
+    "test_markers": ["e2e"]
+  },
+  "pipeline_steps": [
+    {
+      "id": "s01",
+      "name": "extract_frames",
+      "description": "Video frame extraction (OpenCV)",
+      "implemented": true,
+      "gpu_required": false
+    },
+    {
+      "id": "s02",
+      "name": "colmap",
+      "description": "SfM camera pose estimation (hloc + COLMAP)",
+      "implemented": false,
+      "gpu_required": false
+    },
+    {
+      "id": "s03",
+      "name": "gaussian_splatting",
+      "description": "2DGS training (gsplat)",
+      "implemented": false,
+      "gpu_required": true
+    },
+    {
+      "id": "s04",
+      "name": "depth_render",
+      "description": "Depth/Normal map rendering",
+      "implemented": false,
+      "gpu_required": true
+    },
+    {
+      "id": "s05",
+      "name": "tsdf_fusion",
+      "description": "TSDF volume integration (Open3D)",
+      "implemented": false,
+      "gpu_required": false
+    },
+    {
+      "id": "s06",
+      "name": "plane_extraction",
+      "description": "Plane extraction + boundary detection (RANSAC + alphashape)",
+      "implemented": false,
+      "gpu_required": false
+    },
+    {
+      "id": "s07",
+      "name": "ifc_export",
+      "description": "IFC4 BIM file generation (IfcOpenShell)",
+      "implemented": false,
+      "gpu_required": false
+    }
+  ]
+}
