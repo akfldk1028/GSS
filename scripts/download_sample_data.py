@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 from typing import Optional
 
+import gdown
 import requests
 import typer
 from rich.console import Console
@@ -27,9 +28,9 @@ logger = logging.getLogger(__name__)
 DATASETS = {
     "lego": {
         "name": "NeRF Synthetic Lego",
-        "url": "https://huggingface.co/datasets/dylanebert/NeRF-Synthetic/resolve/main/nerf_synthetic.zip",
+        "url": "http://cseweb.ucsd.edu/~viscomp/projects/LF/papers/ECCV20/nerf/nerf_example_data.zip",
         "target_dir": "data/raw/lego",
-        "extract_subdir": "lego",  # The folder name inside the zip
+        "extract_subdir": "nerf_synthetic/lego",  # The folder name inside the zip
         "expected_files": ["transforms_train.json", "transforms_val.json", "transforms_test.json"],
         "expected_dirs": ["train", "val", "test"],
     },
@@ -48,6 +49,14 @@ def download_file(url: str, output_path: Path) -> None:
     """Download a file with progress bar."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Use gdown for Google Drive URLs
+    if "drive.google.com" in url or "drive.usercontent.google.com" in url:
+        console.print(f"[cyan]Downloading from Google Drive to {output_path.name}...[/cyan]")
+        gdown.download(url, str(output_path), quiet=False, fuzzy=True)
+        console.print(f"[green]OK[/green] Downloaded to {output_path}")
+        return
+
+    # Use requests for other URLs
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -68,7 +77,7 @@ def download_file(url: str, output_path: Path) -> None:
                     f.write(chunk)
                     progress.update(task, advance=len(chunk))
 
-    console.print(f"[green]✓[/green] Downloaded to {output_path}")
+    console.print(f"[green]OK[/green] Downloaded to {output_path}")
 
 
 def extract_zip(zip_path: Path, extract_to: Path, subdir: Optional[str] = None) -> None:
@@ -91,10 +100,14 @@ def extract_zip(zip_path: Path, extract_to: Path, subdir: Optional[str] = None) 
                     else:
                         dest.unlink()
                 shutil.move(str(item), str(extract_to))
-            # Remove the now-empty subdirectory
-            subdir_path.rmdir()
 
-    console.print(f"[green]✓[/green] Extracted to {extract_to}")
+            # Remove the parent directory tree
+            # Get the top-level directory to remove (first part of subdir path)
+            top_level_dir = extract_to / subdir.split('/')[0]
+            if top_level_dir.exists():
+                shutil.rmtree(top_level_dir)
+
+    console.print(f"[green]OK[/green] Extracted to {extract_to}")
 
 
 def validate_dataset(target_dir: Path, config: dict) -> bool:
@@ -102,14 +115,14 @@ def validate_dataset(target_dir: Path, config: dict) -> bool:
     console.print(f"[cyan]Validating dataset structure...[/cyan]")
 
     if not target_dir.exists():
-        console.print(f"[red]✗[/red] Target directory does not exist: {target_dir}")
+        console.print(f"[red]X[/red] Target directory does not exist: {target_dir}")
         return False
 
     # Check expected files
     for expected_file in config["expected_files"]:
         file_path = target_dir / expected_file
         if not file_path.exists():
-            console.print(f"[red]✗[/red] Missing expected file: {expected_file}")
+            console.print(f"[red]X[/red] Missing expected file: {expected_file}")
             return False
 
         # Validate JSON files
@@ -117,26 +130,26 @@ def validate_dataset(target_dir: Path, config: dict) -> bool:
             try:
                 data = json.loads(file_path.read_text())
                 if "frames" not in data:
-                    console.print(f"[red]✗[/red] Invalid JSON structure in {expected_file}: missing 'frames' key")
+                    console.print(f"[red]X[/red] Invalid JSON structure in {expected_file}: missing 'frames' key")
                     return False
-                console.print(f"[green]✓[/green] Valid JSON: {expected_file} ({len(data['frames'])} frames)")
+                console.print(f"[green]OK[/green] Valid JSON: {expected_file} ({len(data['frames'])} frames)")
             except json.JSONDecodeError as e:
-                console.print(f"[red]✗[/red] Invalid JSON in {expected_file}: {e}")
+                console.print(f"[red]X[/red] Invalid JSON in {expected_file}: {e}")
                 return False
 
     # Check expected directories
     for expected_dir in config["expected_dirs"]:
         dir_path = target_dir / expected_dir
         if not dir_path.exists():
-            console.print(f"[red]✗[/red] Missing expected directory: {expected_dir}")
+            console.print(f"[red]X[/red] Missing expected directory: {expected_dir}")
             return False
 
         # Count images in directory
         image_extensions = {".png", ".jpg", ".jpeg"}
         images = [f for f in dir_path.iterdir() if f.suffix.lower() in image_extensions]
-        console.print(f"[green]✓[/green] Found directory: {expected_dir} ({len(images)} images)")
+        console.print(f"[green]OK[/green] Found directory: {expected_dir} ({len(images)} images)")
 
-    console.print(f"[green]✓[/green] Dataset validation passed")
+    console.print(f"[green]OK[/green] Dataset validation passed")
     return True
 
 
@@ -159,7 +172,7 @@ def download(
         console.print(f"[yellow]Dataset already exists at {target_dir}[/yellow]")
         console.print(f"[yellow]Use --force to re-download[/yellow]")
         if validate_dataset(target_dir, config):
-            console.print(f"[green]✓[/green] Dataset is valid and ready to use")
+            console.print(f"[green]OK[/green] Dataset is valid and ready to use")
             return
         else:
             console.print(f"[yellow]Validation failed, proceeding with download...[/yellow]")
@@ -191,10 +204,10 @@ def download(
 
         # Validate
         if validate_dataset(target_dir, config):
-            console.print(f"[green]✓[/green] Successfully downloaded and validated {config['name']}")
-            console.print(f"[green]✓[/green] Dataset ready at: {target_dir}")
+            console.print(f"[green]OK[/green] Successfully downloaded and validated {config['name']}")
+            console.print(f"[green]OK[/green] Dataset ready at: {target_dir}")
         else:
-            console.print(f"[red]✗[/red] Dataset validation failed")
+            console.print(f"[red]X[/red] Dataset validation failed")
             raise typer.Exit(1)
 
     except requests.RequestException as e:
@@ -223,7 +236,7 @@ def list_datasets() -> None:
 
     for key, config in DATASETS.items():
         target_dir = Path(config["target_dir"])
-        status = "✓ Downloaded" if target_dir.exists() else "Not downloaded"
+        status = "OK Downloaded" if target_dir.exists() else "Not downloaded"
         table.add_row(key, config["name"], config["target_dir"], status)
 
     console.print(table)
