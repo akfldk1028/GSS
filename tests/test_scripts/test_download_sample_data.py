@@ -231,6 +231,103 @@ def test_extract_zip_with_subdir(tmp_path: Path, mock_zip_file: Path):
     logger.info(f"✓ extract_zip with subdir test passed: {extract_dir}")
 
 
+def test_extract_zip_creates_extract_directory(tmp_path: Path, mock_zip_file: Path):
+    """Test that extract_zip works even if extract directory doesn't exist."""
+    extract_dir = tmp_path / "new_extract_dir"
+
+    # Don't create the directory - extract_zip should handle this
+    extract_zip(mock_zip_file, extract_dir, subdir=None)
+
+    # Verify extraction succeeded
+    assert extract_dir.exists(), "Extract directory should be created"
+    assert (extract_dir / "nerf_synthetic" / "lego").exists(), "Nested structure should exist"
+    logger.info("✓ extract_zip creates directory test passed")
+
+
+def test_extract_zip_invalid_zipfile(tmp_path: Path):
+    """Test extract_zip with an invalid (corrupted) zip file."""
+    # Create a fake zip file with invalid content
+    fake_zip = tmp_path / "fake.zip"
+    fake_zip.write_bytes(b"not a real zip file")
+
+    extract_dir = tmp_path / "extracted"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Verify that extraction fails
+    with pytest.raises(zipfile.BadZipFile):
+        extract_zip(fake_zip, extract_dir, subdir=None)
+
+    logger.info("✓ extract_zip invalid zipfile test passed")
+
+
+def test_extract_zip_nonexistent_file(tmp_path: Path):
+    """Test extract_zip with a nonexistent zip file."""
+    nonexistent_zip = tmp_path / "nonexistent.zip"
+    extract_dir = tmp_path / "extracted"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Verify that extraction fails
+    with pytest.raises(FileNotFoundError):
+        extract_zip(nonexistent_zip, extract_dir, subdir=None)
+
+    logger.info("✓ extract_zip nonexistent file test passed")
+
+
+def test_extract_zip_empty_zipfile(tmp_path: Path):
+    """Test extract_zip with an empty but valid zip file."""
+    # Create an empty zip file
+    empty_zip = tmp_path / "empty.zip"
+    with zipfile.ZipFile(empty_zip, "w") as zf:
+        pass  # Create empty zip
+
+    extract_dir = tmp_path / "extracted_empty"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Should extract successfully (no files)
+    extract_zip(empty_zip, extract_dir, subdir=None)
+
+    # Verify directory exists but is empty
+    assert extract_dir.exists(), "Extract directory should exist"
+    assert not any(extract_dir.iterdir()), "Extract directory should be empty"
+    logger.info("✓ extract_zip empty zipfile test passed")
+
+
+def test_extract_zip_nonexistent_subdir(tmp_path: Path, mock_zip_file: Path):
+    """Test extract_zip when specified subdir doesn't exist in the zip."""
+    extract_dir = tmp_path / "extracted_wrong_subdir"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # Specify a subdir that doesn't exist in the zip
+    extract_zip(mock_zip_file, extract_dir, subdir="nonexistent/path")
+
+    # Should extract normally, but subdir path won't be found/moved
+    assert extract_dir.exists(), "Extract directory should exist"
+    # The original structure should remain since the subdir doesn't exist
+    assert (extract_dir / "nerf_synthetic" / "lego").exists(), "Original structure should be preserved"
+    logger.info("✓ extract_zip nonexistent subdir test passed")
+
+
+def test_extract_zip_overwrites_existing_files(tmp_path: Path, mock_zip_file: Path):
+    """Test that extract_zip properly overwrites existing files."""
+    extract_dir = tmp_path / "extracted_overwrite"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    # First extraction
+    extract_zip(mock_zip_file, extract_dir, subdir="nerf_synthetic/lego")
+
+    # Modify a file
+    train_file = extract_dir / "train" / "r_0.png"
+    original_size = train_file.stat().st_size
+    train_file.write_bytes(b"modified_data")
+
+    # Second extraction should overwrite
+    extract_zip(mock_zip_file, extract_dir, subdir="nerf_synthetic/lego")
+
+    # Verify file was restored to original
+    assert train_file.stat().st_size == original_size, "File should be overwritten"
+    logger.info("✓ extract_zip overwrites existing files test passed")
+
+
 def test_validate_dataset_valid(mock_lego_dataset: Path):
     """Test validate_dataset with a valid lego dataset."""
     config = DATASETS["lego"]
