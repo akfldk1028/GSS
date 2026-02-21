@@ -1,7 +1,6 @@
 name: gss
 channels:
   - pytorch
-  - nvidia
   - conda-forge
   - defaults
 
@@ -9,10 +8,10 @@ dependencies:
   # Core Python
   - python=3.10
 
-  # PyTorch with CUDA support (cu121)
+  # PyTorch CPU-only (fewer DLL dependencies, more stable on Windows)
   - pytorch>=2.0
   - torchvision
-  - pytorch-cuda=12.1
+  - cpuonly
 
   # Core dependencies (conda-installable)
   - numpy>=1.24,<2.0

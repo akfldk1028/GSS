@@ -9,7 +9,7 @@ dependencies:
   # Core Python
   - python=3.10
 
-  # PyTorch with CUDA support (cu121)
+  # PyTorch with CUDA support via conda (better DLL dependency management)
   - pytorch>=2.0
   - torchvision
   - pytorch-cuda=12.1

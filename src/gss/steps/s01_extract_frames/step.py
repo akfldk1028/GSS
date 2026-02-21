@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import ClassVar
 
 from gss.core.step_base import BaseStep
@@ -27,7 +26,6 @@ class ExtractFramesStep(BaseStep[ExtractFramesInput, ExtractFramesOutput, Extrac
 
     def run(self, inputs: ExtractFramesInput) -> ExtractFramesOutput:
         import cv2
-        import numpy as np
 
         output_dir = self.data_root / "interim" / "s01_frames"
         output_dir.mkdir(parents=True, exist_ok=True)
