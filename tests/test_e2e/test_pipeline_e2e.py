@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from gss.steps.s01_extract_frames.config import ExtractFramesConfig
-from gss.steps.s01_extract_frames.contracts import ExtractFramesInput, ExtractFramesOutput
+from gss.steps.s01_extract_frames.contracts import ExtractFramesInput
 from gss.steps.s01_extract_frames.step import ExtractFramesStep
 from gss.steps.s02_colmap.contracts import ColmapOutput
 from gss.steps.s03_gaussian_splatting.contracts import GaussianSplattingOutput
