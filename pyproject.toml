@@ -16,6 +16,8 @@ dependencies = [
     "pyyaml>=6.0",
     "typer>=0.9",
     "rich>=13.0",
+    "requests>=2.28",
+    "gdown>=4.7",
 
     # Phase 0-1: Video / SfM
     "opencv-python>=4.8",
