@@ -1,43 +1,44 @@
 {
   "task_type": "verification",
-  "parent_spec": "012-e2e-pipeline-test",
-  "description": "Verify the E2E pipeline test implementation",
+  "parent_spec": "014-install-colmap-gsplat",
+  "description": "Verify COLMAP installation and gsplat/pycolmap imports",
   "files_to_verify": {
+    "pipeline": []
+  },
+  "files_to_create": {
     "pipeline": [
-      "tests/test_e2e/test_pipeline_e2e.py",
-      "tests/test_e2e/conftest.py",
-      "tests/test_e2e/__init__.py"
+      "tests/test_colmap_gsplat_verification.py"
     ]
   },
   "files_to_reference": [
-    "src/gss/steps/s01_extract_frames/step.py",
-    "src/gss/core/pipeline_runner.py",
-    "pyproject.toml"
+    "test_imports_simple.py",
+    "test_minimal_imports.py",
+    "tests/test_e2e/test_pipeline_e2e.py"
   ],
   "patterns": {
-    "test_pattern": "pytest tests with markers (e2e marker defined in pyproject.toml)",
-    "fixture_pattern": "conftest.py provides synthetic_video fixture using OpenCV",
-    "step_pattern": "Each step has config, contracts (input/output models), and step class with execute() method",
-    "mocking_pattern": "GPU steps (S03, S04) are mocked by creating fake output files and contract objects"
+    "test_pattern": "pytest tests with simple import verification",
+    "verification_pattern": "Try-except blocks with PASS/FAIL output, following test_imports_simple.py pattern",
+    "command_verification": "Subprocess calls to verify COLMAP binary is accessible"
   },
   "existing_implementations": {
-    "description": "E2E test already implemented with synthetic video generation and step mocking",
+    "description": "Existing import verification scripts test torch, gsplat, matplotlib, gss",
     "relevant_files": [
-      "tests/test_e2e/test_pipeline_e2e.py",
-      "tests/test_e2e/conftest.py"
+      "test_imports_simple.py",
+      "test_minimal_imports.py"
     ],
-    "test_structure": {
-      "s01_extract_frames": "Real implementation tested",
-      "s02_colmap": "Mocked (not implemented yet)",
-      "s03_gaussian_splatting": "Mocked (GPU step)",
-      "s04_depth_render": "Mocked (GPU step)",
-      "connectivity_verification": "Verifies each step's output connects to next step's input"
+    "verification_structure": {
+      "import_tests": "Try-except blocks that import and print success/failure",
+      "command_tests": "Subprocess calls to check binary accessibility"
     }
   },
   "verification_requirements": {
-    "e2e_test": "pytest tests/test_e2e/ -v should pass",
-    "marker_test": "pytest -m e2e should run only E2E tests",
-    "existing_tests": "No existing tests to maintain (only E2E test exists)",
-    "dependencies": ["opencv-python", "numpy", "pytest"]
+    "colmap_binary": "colmap --version should execute and return version",
+    "pycolmap_import": "python -c \"import pycolmap; print(pycolmap.__version__)\" should succeed",
+    "gsplat_import": "python -c \"import gsplat; from gsplat import rasterization; print('OK')\" should succeed",
+    "environment": "conda gss environment must be activated"
+  },
+  "installation_paths": {
+    "colmap_binary": "C:/tools/colmap/",
+    "conda_env": "gss"
   }
 }
