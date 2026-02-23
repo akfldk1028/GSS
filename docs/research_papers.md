@@ -125,6 +125,38 @@ Cloud2BIM (2503.11498)이 우리와 거의 동일한 파이프라인:
 - surfel(2D disk) 표현이 surface와 자연스럽게 정렬 → depth 노이즈 감소
 - TSDF integration 시 depth 품질이 핵심 → 2DGS 선택이 올바름
 
+### 2.7 실내 재구성 + BIM 최적화 (2026-02-23 추가)
+
+| # | arXiv | 제목 | 저자 | 게재 | 역할 |
+|---|-------|------|------|------|------|
+| 16 | [2510.23930](https://arxiv.org/abs/2510.23930) | **PlanarGS: Plane-Guided GS for Indoor Reconstruction** | — | **NeurIPS 2025** | **GroundedSAM + co-planarity loss. Replica에서 2DGS 대비 Chamfer 2.5x 개선 (10.54→4.13cm)** |
+| 17 | — | **IndoorGS: Geometric-Cue-Guided GS for Indoor Reconstruction** | — | **CVPR 2025** | 3D line+plane cues, adaptive density control |
+| 18 | — | **VERTICAL: Post-RANSAC Coplanar Face Merging** | — | **ISPRS 2025** | coplanar 평면 병합 + 비정규 경계 정리. s06 후처리 참고 |
+
+### 2.9 Plane Extraction 개선 참고 (2026-02-23 s06 v4)
+
+| # | 제목 | 저자 | 게재 | 역할 |
+|---|------|------|------|------|
+| 19 | **Structure-preserving Planar Simplification for Indoor Environments** | — | 2408.06814 | parallel threshold 0.001, separation 0.5m, vertex-translation merging |
+| 20 | **Furukawa et al. — Manhattan World Stereo** | Furukawa et al. | ECCV 2016 | Normal histogram → dominant axis detection → axis-aligned reconstruction |
+
+**적용된 기법:**
+- VERTICAL (18): coplanar merge 개념 → Union-Find 기반 구현
+- Cloud2BIM (13): RANSAC→plane→boundary→IFC 파이프라인 검증
+- Furukawa (20): Manhattan World alignment → normal SVD로 dominant axes 탐지
+- Structure-preserving (19): centroid separation 기반 coplanarity 판정 (d비교보다 정확)
+
+### 2.8 최적화 분석 (2026-02-23)
+
+**현재 파이프라인 대비 개선 가능 포인트:**
+
+| 단계 | 현재 방식 | 문제점 | 대안 (논문 근거) | 예상 효과 |
+|------|----------|--------|----------------|----------|
+| s03 학습 | L1+SSIM만 | textureless depth 부정확 | Depth-Anything V2 prior (PlanarGS, 2DGS-Room) | Chamfer 2x 개선 |
+| s04 렌더 | `render_mode="ED"` (biased) | 가중평균 → 곡면 | PGSR unbiased depth | DTU 39% 개선 |
+| s06 검출 | Sequential RANSAC | 같은 벽 분할 | Cloud2BIM histogram / coplanar merge | 7 walls→4 |
+| s06 후처리 | 없음 | 중복 plane | VERTICAL coplanar merge | 즉시 해결 |
+
 ---
 
 ## 5. 다음 단계 (구현 우선순위)

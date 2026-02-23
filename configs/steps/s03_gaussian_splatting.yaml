@@ -1,5 +1,16 @@
 method: 2dgs
 iterations: 30000
 learning_rate: 0.00016
+lr_final: 0.0000016
+
+# Densification
+densify_from: 500
 densify_until: 15000
-sh_degree: 3
+densify_interval: 100
+densify_grad_threshold: 0.0002
+densify_scale_threshold: 0.01
+max_gaussians: 500000
+
+# Pruning
+prune_opacity_threshold: 0.005
+opacity_reset_interval: 3000

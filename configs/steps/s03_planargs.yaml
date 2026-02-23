@@ -1,0 +1,10 @@
+planargs_repo: "clone/PlanarGS"
+conda_env: "planargs"
+group_size: 25
+text_prompts: "wall. floor. door. screen. window. ceiling. table"
+iterations: 30000
+voxel_size: 0.02
+max_depth: 100.0
+skip_geomprior: false
+skip_lp3: false
+skip_train: false
