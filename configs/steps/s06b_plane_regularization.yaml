@@ -1,0 +1,26 @@
+# Step 06b: Plane Regularization — default config
+# All sub-modules enabled except opening detection (Phase 2)
+
+enable_normal_snapping: true
+enable_height_snapping: true
+enable_wall_thickness: true
+enable_intersection_trimming: true
+enable_space_detection: true
+enable_opening_detection: false
+
+# A. Normal snapping
+normal_snap_threshold: 20.0        # degrees
+
+# B. Height snapping
+height_cluster_tolerance: 0.5      # scene units
+
+# C. Wall thickness
+max_wall_thickness: 1.0
+default_wall_thickness: 0.2
+min_parallel_overlap: 0.3          # fraction
+
+# D. Intersection trimming
+snap_tolerance: 0.5                # scene units
+
+# E. Space detection
+min_space_area: 1.0                # square scene units
