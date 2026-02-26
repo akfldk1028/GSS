@@ -1,0 +1,30 @@
+{
+  "project_dir": "C:\\DK\\GSS",
+  "running": true,
+  "started_at": "2026-02-21T12:08:25.994601+00:00",
+  "config": {
+    "max_concurrent_tasks": 1,
+    "headless_mode": true
+  },
+  "running_tasks": {
+    "016-visualization-module": {
+      "spec_id": "016-visualization-module",
+      "spec_dir": "C:\\DK\\GSS\\.auto-claude\\worktrees\\tasks\\016-visualization-module\\.auto-claude\\specs\\016-visualization-module",
+      "status": "in_progress",
+      "is_running": true,
+      "started_at": "2026-02-21T12:12:22.841375+00:00",
+      "last_update": "2026-02-21T19:49:34.939333+00:00",
+      "task_type": "impl",
+      "phase": "coding",
+      "session": 3073,
+      "current_subtask": "subtask-2-5"
+    }
+  },
+  "queued_tasks": [],
+  "stats": {
+    "running": 1,
+    "queued": 0,
+    "completed": 1
+  },
+  "timestamp": "2026-02-21T19:49:43.533585+00:00"
+}

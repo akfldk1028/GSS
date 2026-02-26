@@ -69,3 +69,5 @@ htmlcov/
 .worktrees/
 .security-key
 logs/security/
+data/test
+nul
