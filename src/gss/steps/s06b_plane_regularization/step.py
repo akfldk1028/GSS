@@ -1,9 +1,10 @@
 """Step 06b: Plane regularization — geometric cleanup between RANSAC and IFC.
 
-Orchestrates sub-modules A→B→C→D→E→(F) in order:
+Orchestrates sub-modules A→B→C→C2→D→E→(F) in order:
   A. Normal snapping (walls → ±X/±Z, floors/ceilings → ±Y)
   B. Height snapping (cluster floor/ceiling d-values)
   C. Wall thickness (parallel pair detection + center-lines)
+  C2. Wall closure (synthesize missing walls from floor boundary)
   D. Intersection trimming (snap center-line endpoints to corners)
   E. Space detection (polygonize center-lines → room boundaries)
   F. Opening detection (Phase 2, disabled by default)
@@ -135,6 +136,73 @@ def _serialize_planes(planes: list[dict]) -> list[dict]:
     return result
 
 
+def _estimate_scale(planes: list[dict], expected_room_size: float = 5.0) -> float:
+    """Estimate coordinate scale from bounding box of architectural planes.
+
+    Computes the bounding box of all wall/floor/ceiling boundaries,
+    takes the median dimension, and divides by the expected room size.
+
+    Returns scale factor (scene_units / meter). E.g., if COLMAP coords
+    are ~35 units for a ~5m room, returns ~7.0.
+    """
+    all_pts = []
+    for p in planes:
+        if p["label"] in ("wall", "floor", "ceiling"):
+            bnd = p.get("boundary_3d")
+            if bnd is not None and len(bnd) > 0:
+                pts = np.asarray(bnd)
+                if pts.ndim == 2:
+                    all_pts.append(pts)
+    if not all_pts:
+        return 1.0
+
+    combined = np.vstack(all_pts)
+    bbox_min = combined.min(axis=0)
+    bbox_max = combined.max(axis=0)
+    extents = bbox_max - bbox_min
+
+    # Sort extents: for a room, the median dimension is a good room-size proxy
+    sorted_ext = np.sort(extents)
+    # Use the median of the two larger dimensions (XZ for rooms, skip height)
+    median_dim = sorted_ext[1] if len(sorted_ext) >= 2 else sorted_ext[0]
+
+    if median_dim < 1e-3:
+        return 1.0
+
+    scale = median_dim / expected_room_size
+    return max(scale, 0.1)  # floor at 0.1 to avoid degenerate values
+
+
+def _transform_walls_from_manhattan(
+    walls: list[dict], R: np.ndarray,
+) -> list[dict]:
+    """Transform walls.json center-lines from Manhattan to original coordinates.
+
+    Walls have center_line_2d in XZ plane of Manhattan space.
+    Convert to 3D, apply inverse rotation, return with center_line_3d.
+    """
+    R_inv = R.T
+    result = []
+    for w in walls:
+        cl = w["center_line_2d"]
+        p1_xz, p2_xz = np.array(cl[0]), np.array(cl[1])
+        y_min, y_max = w["height_range"]
+        y_mid = (y_min + y_max) / 2.0
+
+        # 3D points in Manhattan space (Y-up): [x, y, z]
+        p1_3d = np.array([p1_xz[0], y_mid, p1_xz[1]])
+        p2_3d = np.array([p2_xz[0], y_mid, p2_xz[1]])
+
+        # Transform to original coordinates
+        p1_orig = R_inv @ p1_3d
+        p2_orig = R_inv @ p2_3d
+
+        entry = dict(w)
+        entry["center_line_3d"] = [p1_orig.tolist(), p2_orig.tolist()]
+        result.append(entry)
+    return result
+
+
 class PlaneRegularizationStep(
     BaseStep[PlaneRegularizationInput, PlaneRegularizationOutput, PlaneRegularizationConfig]
 ):
@@ -173,6 +241,33 @@ class PlaneRegularizationStep(
                 "processing in original coordinates (results may be less accurate)"
             )
 
+        # --- Scale estimation ---
+        if self.config.scale_mode == "auto":
+            scale = _estimate_scale(planes, self.config.expected_room_size)
+            logger.info(f"Auto scale estimation: {scale:.2f} scene_units/meter")
+        elif self.config.scale_mode == "manual":
+            scale = self.config.coordinate_scale
+            logger.info(f"Manual scale: {scale:.2f} scene_units/meter")
+        else:  # metric
+            scale = 1.0
+
+        # Compute effective tolerances (scale distance thresholds, keep angles)
+        eff_height_tol = self.config.height_cluster_tolerance * scale
+        eff_snap_tol = self.config.snap_tolerance * scale
+        eff_min_area = self.config.min_space_area * scale * scale
+        eff_default_thickness = self.config.default_wall_thickness * scale
+        # max_wall_thickness scaled but capped at 5*scale to prevent cross-room pairing
+        eff_max_wall_thickness = min(
+            self.config.max_wall_thickness * scale,
+            5.0 * scale,  # 5m equivalent — no wall is thicker than this
+        )
+
+        logger.info(
+            f"Effective tolerances (scale={scale:.2f}): "
+            f"height_tol={eff_height_tol:.2f}, snap_tol={eff_snap_tol:.2f}, "
+            f"min_area={eff_min_area:.2f}, default_thickness={eff_default_thickness:.2f}"
+        )
+
         # --- A. Normal Snapping ---
         if self.config.enable_normal_snapping:
             from ._snap_normals import snap_normals
@@ -186,7 +281,7 @@ class PlaneRegularizationStep(
         if self.config.enable_height_snapping:
             from ._snap_heights import snap_heights
             height_stats = snap_heights(
-                planes, tolerance=self.config.height_cluster_tolerance,
+                planes, tolerance=eff_height_tol,
             )
             for p in planes:
                 if p["label"] in ("floor", "ceiling"):
@@ -198,15 +293,30 @@ class PlaneRegularizationStep(
             from ._wall_thickness import compute_wall_thickness
             walls = compute_wall_thickness(
                 planes,
-                max_wall_thickness=self.config.max_wall_thickness,
-                default_wall_thickness=self.config.default_wall_thickness,
+                max_wall_thickness=eff_max_wall_thickness,
+                default_wall_thickness=eff_default_thickness,
                 min_parallel_overlap=self.config.min_parallel_overlap,
             )
+
+        # --- C2. Wall Closure ---
+        if self.config.enable_wall_closure and walls:
+            from ._wall_closure import synthesize_missing_walls
+            walls, new_planes = synthesize_missing_walls(
+                walls,
+                planes,
+                floor_heights=height_stats.get("floor_heights", []),
+                ceiling_heights=height_stats.get("ceiling_heights", []),
+                scale=scale,
+                max_gap_ratio=self.config.max_closure_gap_ratio,
+                use_floor_ceiling_hints=self.config.use_floor_ceiling_hints,
+                default_thickness=eff_default_thickness,
+            )
+            planes.extend(new_planes)
 
         # --- D. Intersection Trimming ---
         if self.config.enable_intersection_trimming and walls:
             from ._intersection_trimming import trim_intersections
-            trim_intersections(walls, snap_tolerance=self.config.snap_tolerance)
+            trim_intersections(walls, snap_tolerance=eff_snap_tol)
 
             # Rebuild wall boundaries from trimmed center-lines
             plane_by_id = {p["id"]: p for p in planes}
@@ -223,7 +333,8 @@ class PlaneRegularizationStep(
                 walls,
                 floor_heights=height_stats.get("floor_heights", []),
                 ceiling_heights=height_stats.get("ceiling_heights", []),
-                min_area=self.config.min_space_area,
+                min_area=eff_min_area,
+                snap_tolerance=eff_snap_tol,
             )
 
         # --- F. Opening Detection (Phase 2) ---
@@ -235,6 +346,22 @@ class PlaneRegularizationStep(
         if R is not None:
             _transform_from_manhattan(planes, R)
             logger.info("Transformed back to original coordinates")
+
+        # --- Transform walls to original coordinates ---
+        if R is not None:
+            walls_output = _transform_walls_from_manhattan(walls, R)
+        else:
+            # No rotation: center_line_3d is just XZ → 3D with Y=mid
+            walls_output = []
+            for w in walls:
+                entry = dict(w)
+                cl = w["center_line_2d"]
+                y_mid = sum(w["height_range"]) / 2.0
+                entry["center_line_3d"] = [
+                    [cl[0][0], y_mid, cl[0][1]],
+                    [cl[1][0], y_mid, cl[1][1]],
+                ]
+                walls_output.append(entry)
 
         # --- Save outputs ---
         # 1. Regularized planes.json (same schema as s06 output)
@@ -252,16 +379,17 @@ class PlaneRegularizationStep(
         with open(boundaries_file, "w") as f:
             json.dump(boundaries_data, f, indent=2)
 
-        # 3. Walls.json (center-lines + thickness, in Manhattan space)
+        # 3. Walls.json (with both Manhattan center_line_2d and original center_line_3d)
         walls_file = output_dir / "walls.json"
         with open(walls_file, "w") as f:
-            json.dump(walls, f, indent=2)
+            json.dump(walls_output, f, indent=2)
 
         # 4. Spaces.json (room polygons in Manhattan XZ plane)
         spaces_file = None
         if spaces:
             spaces_output = {
                 "manhattan_rotation": R.tolist() if R is not None else None,
+                "coordinate_scale": float(scale),
                 "spaces": spaces,
             }
             spaces_file = output_dir / "spaces.json"
@@ -278,7 +406,8 @@ class PlaneRegularizationStep(
 
         logger.info(
             f"Plane regularization complete: {num_walls} walls, "
-            f"{len(walls)} wall objects, {num_spaces} spaces"
+            f"{len(walls)} wall objects, {num_spaces} spaces "
+            f"(scale={scale:.2f})"
         )
 
         return PlaneRegularizationOutput(

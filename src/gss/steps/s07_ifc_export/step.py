@@ -168,7 +168,13 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
     config_type: ClassVar = IfcExportConfig
 
     def validate_inputs(self, inputs: IfcExportInput) -> bool:
-        return inputs.planes_file.exists() and inputs.boundaries_file.exists()
+        if not (inputs.planes_file.exists() and inputs.boundaries_file.exists()):
+            return False
+        if inputs.walls_file and not inputs.walls_file.exists():
+            logger.warning(f"walls_file specified but not found: {inputs.walls_file}")
+        if inputs.spaces_file and not inputs.spaces_file.exists():
+            logger.warning(f"spaces_file specified but not found: {inputs.spaces_file}")
+        return True
 
     def run(self, inputs: IfcExportInput) -> IfcExportOutput:
         import ifcopenshell
@@ -182,6 +188,28 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
             planes = json.load(f)
         with open(inputs.boundaries_file) as f:
             boundaries = json.load(f)
+
+        # Load optional walls.json for per-wall thickness
+        walls_data: list[dict] = []
+        if inputs.walls_file and inputs.walls_file.exists():
+            with open(inputs.walls_file) as f:
+                walls_data = json.load(f)
+            logger.info(f"Loaded {len(walls_data)} walls from {inputs.walls_file}")
+
+        # Load optional spaces.json
+        spaces_data: list[dict] = []
+        if inputs.spaces_file and inputs.spaces_file.exists():
+            with open(inputs.spaces_file) as f:
+                spaces_raw = json.load(f)
+            spaces_data = spaces_raw.get("spaces", [])
+            logger.info(f"Loaded {len(spaces_data)} spaces from {inputs.spaces_file}")
+
+        # Build wall thickness lookup: plane_id → thickness
+        wall_thickness_map: dict[int, float] = {}
+        for w in walls_data:
+            thickness = w.get("thickness", self.config.default_wall_thickness)
+            for pid in w.get("plane_ids", []):
+                wall_thickness_map[pid] = thickness
 
         # Build boundary lookup
         boundary_map = {b["id"]: b["boundary_3d"] for b in boundaries}
@@ -224,6 +252,7 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
 
         num_walls = 0
         num_slabs = 0
+        num_spaces = 0
 
         for plane in planes:
             plane_id = plane["id"]
@@ -236,6 +265,9 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                 continue
 
             if label == "wall":
+                # Use per-wall thickness from walls.json if available
+                thickness = wall_thickness_map.get(plane_id, self.config.default_wall_thickness)
+
                 wall = ifcopenshell.api.run(
                     "root.create_entity", ifc, ifc_class="IfcWall", name=f"Wall_{plane_id}"
                 )
@@ -244,7 +276,7 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                     body,
                     boundary,
                     normal,
-                    self.config.default_wall_thickness,
+                    thickness,
                     None,
                 )
                 if product_shape:
@@ -255,7 +287,6 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                 num_walls += 1
 
             elif label in ("floor", "ceiling"):
-                slab_type = "FLOOR" if label == "floor" else "ROOF"
                 slab = ifcopenshell.api.run(
                     "root.create_entity", ifc, ifc_class="IfcSlab", name=f"Slab_{plane_id}"
                 )
@@ -274,15 +305,65 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                 )
                 num_slabs += 1
 
+        # Create IfcSpace objects from spaces.json
+        for space in spaces_data:
+            space_boundary = space.get("boundary_2d", [])
+            if len(space_boundary) < 3:
+                continue
+
+            floor_h = space.get("floor_height", 0.0)
+            ceiling_h = space.get("ceiling_height", 3.0)
+            height = ceiling_h - floor_h
+            if height <= 0:
+                continue
+
+            ifc_space = ifcopenshell.api.run(
+                "root.create_entity", ifc, ifc_class="IfcSpace",
+                name=f"Room_{space['id']}",
+            )
+
+            # Create space geometry: extrude 2D boundary upward
+            # Ensure boundary is closed (first == last coordinate)
+            boundary_closed = list(space_boundary)
+            if boundary_closed and boundary_closed[0] != boundary_closed[-1]:
+                boundary_closed.append(boundary_closed[0])
+            profile_pts = [
+                ifc.createIfcCartesianPoint([float(c[0]), float(c[1])])
+                for c in boundary_closed
+            ]
+
+            if len(profile_pts) >= 4:
+                polyline = ifc.createIfcPolyline(profile_pts)
+                profile = ifc.createIfcArbitraryClosedProfileDef("AREA", None, polyline)
+                direction = ifc.createIfcDirection([0.0, 0.0, 1.0])
+                space_placement = _create_ifc_axis2placement3d(
+                    ifc, point=(0.0, 0.0, float(floor_h)),
+                )
+                solid = ifc.createIfcExtrudedAreaSolid(
+                    profile, space_placement, direction, float(height),
+                )
+                shape = ifc.createIfcShapeRepresentation(body, "Body", "SweptSolid", [solid])
+                product_shape = ifc.createIfcProductDefinitionShape(None, None, [shape])
+                ifc_space.Representation = product_shape
+
+            ifcopenshell.api.run(
+                "spatial.assign_container", ifc, products=[ifc_space], relating_structure=storey
+            )
+            num_spaces += 1
+
         # Write IFC file
         ifc_path = output_dir / f"{self.config.project_name}.ifc"
         ifc.write(str(ifc_path))
 
-        logger.info(f"IFC exported: {num_walls} walls, {num_slabs} slabs -> {ifc_path}")
+        logger.info(
+            f"IFC exported: {num_walls} walls, {num_slabs} slabs, "
+            f"{num_spaces} spaces -> {ifc_path}"
+        )
 
         return IfcExportOutput(
             ifc_path=ifc_path,
             num_walls=num_walls,
             num_slabs=num_slabs,
+            num_spaces=num_spaces,
             ifc_version=self.config.ifc_version,
         )

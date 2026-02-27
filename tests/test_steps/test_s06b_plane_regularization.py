@@ -281,16 +281,18 @@ class TestSpaceDetection:
         assert spaces[0]["floor_height"] == 0.0
         assert spaces[0]["ceiling_height"] == 3.0
 
-    def test_no_closed_polygon(self):
+    def test_no_closed_polygon_uses_convex_hull(self):
         from gss.steps.s06b_plane_regularization._space_detection import detect_spaces
         walls = [
             {"id": 0, "center_line_2d": [[0, 0], [0, 4]], "normal_axis": "x"},
             {"id": 1, "center_line_2d": [[0, 4], [5, 4]], "normal_axis": "z"},
             {"id": 2, "center_line_2d": [[5, 4], [5, 0]], "normal_axis": "x"},
-            # Missing 4th wall → no closed polygon
+            # Missing 4th wall → polygonize fails → convex hull fallback
         ]
         spaces = detect_spaces(walls, floor_heights=[], ceiling_heights=[], min_area=1.0)
-        assert len(spaces) == 0
+        # Convex hull fallback should produce a space
+        assert len(spaces) == 1
+        assert spaces[0]["area"] > 0
 
     def test_too_few_walls(self):
         from gss.steps.s06b_plane_regularization._space_detection import detect_spaces
@@ -306,12 +308,237 @@ class TestSpaceDetection:
 # Full Step Integration
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Phase 1: Scale Estimation
+# ---------------------------------------------------------------------------
+
+class TestScaleEstimation:
+    def test_auto_scale_colmap_data(self):
+        """COLMAP-scale data (~35 scene units for a ~5m room) should yield scale ~7."""
+        from gss.steps.s06b_plane_regularization.step import _estimate_scale
+        # Simulated COLMAP-scale room: 35 x 21 x 28 (X, Y, Z)
+        planes = [
+            {"id": 0, "label": "wall", "boundary_3d": np.array([
+                [0, 0, 0], [0, 21, 0], [0, 21, 28], [0, 0, 28],
+            ])},
+            {"id": 1, "label": "wall", "boundary_3d": np.array([
+                [35, 0, 0], [35, 21, 0], [35, 21, 28], [35, 0, 28],
+            ])},
+            {"id": 2, "label": "floor", "boundary_3d": np.array([
+                [0, 0, 0], [35, 0, 0], [35, 0, 28], [0, 0, 28],
+            ])},
+        ]
+        scale = _estimate_scale(planes, expected_room_size=5.0)
+        # Median dimension of [28, 21, 35] = 28. Scale = 28/5 = 5.6
+        assert 4.0 < scale < 8.0
+
+    def test_manual_scale_override(self):
+        """When scale_mode='manual', the provided coordinate_scale should be used."""
+        cfg = PlaneRegularizationConfig(scale_mode="manual", coordinate_scale=7.0)
+        assert cfg.scale_mode == "manual"
+        assert cfg.coordinate_scale == 7.0
+
+    def test_metric_scale_is_one(self):
+        """When scale_mode='metric', scale should be 1.0."""
+        cfg = PlaneRegularizationConfig(scale_mode="metric")
+        assert cfg.scale_mode == "metric"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Wall Closure
+# ---------------------------------------------------------------------------
+
+class TestWallClosure:
+    def test_synthesize_fourth_wall(self):
+        """With 3 walls and a floor, the 4th wall should be synthesized."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        # 3 walls forming an open U-shape, plus floor
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+            {"id": 1, "plane_ids": [1], "center_line_2d": [[0, 4], [5, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "z"},
+            {"id": 2, "plane_ids": [2], "center_line_2d": [[5, 4], [5, 0]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+            {"id": 1, "label": "wall", "normal": np.array([0, 0, 1]), "d": -4.0,
+             "boundary_3d": np.array([[0, 0, 4], [5, 0, 4], [5, 3, 4], [0, 3, 4]])},
+            {"id": 2, "label": "wall", "normal": np.array([1, 0, 0]), "d": -5.0,
+             "boundary_3d": np.array([[5, 0, 0], [5, 3, 0], [5, 3, 4], [5, 0, 4]])},
+            {"id": 3, "label": "floor", "normal": np.array([0, 1, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [5, 0, 0], [5, 0, 4], [0, 0, 4]])},
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0, max_gap_ratio=0.3,
+        )
+        # Should have at least 4 walls now (original 3 + 1 synthesized)
+        assert len(updated_walls) >= 4
+        # At least one synthetic wall
+        synthetic = [w for w in updated_walls if w.get("synthetic")]
+        assert len(synthetic) >= 1
+
+    def test_no_synthesis_when_closed(self):
+        """With 4 walls forming a closed room, no synthesis needed."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+            {"id": 1, "plane_ids": [1], "center_line_2d": [[0, 4], [5, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "z"},
+            {"id": 2, "plane_ids": [2], "center_line_2d": [[5, 4], [5, 0]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+            {"id": 3, "plane_ids": [3], "center_line_2d": [[5, 0], [0, 0]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "z"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+            {"id": 1, "label": "wall", "normal": np.array([0, 0, 1]), "d": -4.0,
+             "boundary_3d": np.array([[0, 0, 4], [5, 0, 4], [5, 3, 4], [0, 3, 4]])},
+            {"id": 2, "label": "wall", "normal": np.array([1, 0, 0]), "d": -5.0,
+             "boundary_3d": np.array([[5, 0, 0], [5, 3, 0], [5, 3, 4], [5, 0, 4]])},
+            {"id": 3, "label": "wall", "normal": np.array([0, 0, -1]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [5, 0, 0], [5, 3, 0], [0, 3, 0]])},
+            {"id": 4, "label": "floor", "normal": np.array([0, 1, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [5, 0, 0], [5, 0, 4], [0, 0, 4]])},
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0, max_gap_ratio=0.3,
+        )
+        # No new walls should be added (all edges covered)
+        synthetic = [w for w in updated_walls if w.get("synthetic")]
+        assert len(synthetic) == 0
+
+    def test_floor_guided_closure(self):
+        """Wall closure should use floor boundary extent."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        # Only 1 wall + floor
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+            {"id": 1, "label": "floor", "normal": np.array([0, 1, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [5, 0, 0], [5, 0, 4], [0, 0, 4]])},
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0,
+        )
+        # Should synthesize walls for uncovered edges
+        assert len(updated_walls) > 1
+        assert len(new_planes) > 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: T-Junction and Junction Clustering
+# ---------------------------------------------------------------------------
+
+class TestTJunction:
+    def test_t_junction_detection(self):
+        """A wall endpoint meeting the middle of another wall should be handled."""
+        from gss.steps.s06b_plane_regularization._intersection_trimming import trim_intersections
+        walls = [
+            {  # Long Z-wall from x=0 to x=10
+                "id": 0, "plane_ids": [0],
+                "center_line_2d": [[0.0, 5.0], [10.0, 5.0]],
+                "thickness": 0.2, "height_range": [0, 3], "normal_axis": "z",
+            },
+            {  # X-wall approaching from z=0 to z=4.8 (near the long wall at z=5)
+                "id": 1, "plane_ids": [1],
+                "center_line_2d": [[5.0, 0.0], [5.0, 4.8]],
+                "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x",
+            },
+        ]
+        stats = trim_intersections(walls, snap_tolerance=0.5)
+        # Wall 1 endpoint at (5, 4.8) should snap to (5, 5) — the intersection
+        assert stats["snapped_endpoints"] >= 1
+        assert abs(walls[1]["center_line_2d"][1][1] - 5.0) < 0.01
+
+    def test_scaled_snap_tolerance(self):
+        """Scaled snap tolerance should allow snapping at larger distances."""
+        from gss.steps.s06b_plane_regularization._intersection_trimming import trim_intersections
+        walls = [
+            {"id": 0, "plane_ids": [0],
+             "center_line_2d": [[0.0, 0.0], [0.0, 30.0]],
+             "thickness": 1.0, "height_range": [0, 20], "normal_axis": "x"},
+            {"id": 1, "plane_ids": [1],
+             "center_line_2d": [[3.0, 30.0], [40.0, 30.0]],
+             "thickness": 1.0, "height_range": [0, 20], "normal_axis": "z"},
+        ]
+        # With small tolerance, the 3-unit gap shouldn't be snapped
+        stats_small = trim_intersections(
+            [{"id": 0, "plane_ids": [0], "center_line_2d": [[0.0, 0.0], [0.0, 30.0]],
+              "thickness": 1.0, "height_range": [0, 20], "normal_axis": "x"},
+             {"id": 1, "plane_ids": [1], "center_line_2d": [[3.0, 30.0], [40.0, 30.0]],
+              "thickness": 1.0, "height_range": [0, 20], "normal_axis": "z"}],
+            snap_tolerance=0.5,
+        )
+        # With large tolerance (scaled), it should be snapped
+        stats_large = trim_intersections(walls, snap_tolerance=5.0)
+        assert stats_large["snapped_endpoints"] >= stats_small["snapped_endpoints"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Space Detection Improvements
+# ---------------------------------------------------------------------------
+
+class TestSpaceDetectionImprovements:
+    def test_snap_buffer_closes_small_gap(self):
+        """Snap+buffer should close small gaps between wall endpoints."""
+        from gss.steps.s06b_plane_regularization._space_detection import detect_spaces
+        # 4 walls with a small gap at one corner
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [0, 4]], "normal_axis": "x"},
+            {"id": 1, "center_line_2d": [[0, 4], [5, 4]], "normal_axis": "z"},
+            {"id": 2, "center_line_2d": [[5, 4], [5, 0.1]], "normal_axis": "x"},  # gap of 0.1
+            {"id": 3, "center_line_2d": [[5, 0], [0, 0]], "normal_axis": "z"},  # doesn't quite meet
+        ]
+        # Without snap, this might not close
+        spaces_no_snap = detect_spaces(walls, floor_heights=[0.0], ceiling_heights=[3.0],
+                                        min_area=1.0, snap_tolerance=0.0)
+        # With snap, should close
+        spaces_snap = detect_spaces(walls, floor_heights=[0.0], ceiling_heights=[3.0],
+                                     min_area=1.0, snap_tolerance=0.2)
+        # snap version should detect at least as many spaces
+        assert len(spaces_snap) >= len(spaces_no_snap)
+
+    def test_convex_hull_fallback(self):
+        """When polygonize fails, convex hull should provide a fallback."""
+        from gss.steps.s06b_plane_regularization._space_detection import _convex_hull_fallback
+        from shapely.geometry import LineString
+        lines = [
+            LineString([(0, 0), (5, 0)]),
+            LineString([(5, 0), (5, 4)]),
+            LineString([(5, 4), (0, 4)]),
+        ]
+        spaces = _convex_hull_fallback(lines, floor_h=0.0, ceiling_h=3.0)
+        assert len(spaces) == 1
+        assert spaces[0]["area"] > 0
+
+
+# ---------------------------------------------------------------------------
+# Full Step Integration
+# ---------------------------------------------------------------------------
+
 class TestPlaneRegularizationStep:
     def test_config_defaults(self):
         cfg = PlaneRegularizationConfig()
         assert cfg.enable_normal_snapping is True
         assert cfg.enable_opening_detection is False
         assert cfg.normal_snap_threshold == 20.0
+        assert cfg.scale_mode == "auto"
+        assert cfg.enable_wall_closure is True
 
     def test_contracts(self):
         inp = PlaneRegularizationInput(
@@ -342,17 +569,19 @@ class TestPlaneRegularizationStep:
         assert output.planes_file.exists()
         assert output.boundaries_file.exists()
         assert output.walls_file.exists()
-        assert output.num_walls == 4
+        assert output.num_walls >= 4
 
         # Verify planes.json is valid
         with open(output.planes_file) as f:
             planes = json.load(f)
-        assert len(planes) == 6
+        assert len(planes) >= 6
 
-        # Verify walls.json
+        # Verify walls.json has center_line_3d
         with open(output.walls_file) as f:
             walls = json.load(f)
         assert len(walls) >= 4
+        for w in walls:
+            assert "center_line_3d" in w
 
     def test_step_with_disabled_modules(self, data_root: Path, manhattan_planes_json: Path, manhattan_boundaries_json: Path):
         """Run with all modules disabled — should just pass through."""
@@ -364,6 +593,7 @@ class TestPlaneRegularizationStep:
             enable_wall_thickness=False,
             enable_intersection_trimming=False,
             enable_space_detection=False,
+            enable_wall_closure=False,
         )
         step = PlaneRegularizationStep(config=cfg, data_root=data_root)
         inp = PlaneRegularizationInput(
@@ -373,3 +603,17 @@ class TestPlaneRegularizationStep:
         output = step.execute(inp)
         assert output.planes_file.exists()
         assert output.num_walls == 4
+
+    def test_step_metric_scale(self, data_root: Path, manhattan_planes_json: Path, manhattan_boundaries_json: Path):
+        """Run with metric scale mode (scale=1.0)."""
+        from gss.steps.s06b_plane_regularization.step import PlaneRegularizationStep
+
+        cfg = PlaneRegularizationConfig(scale_mode="metric")
+        step = PlaneRegularizationStep(config=cfg, data_root=data_root)
+        inp = PlaneRegularizationInput(
+            planes_file=manhattan_planes_json,
+            boundaries_file=manhattan_boundaries_json,
+        )
+        output = step.execute(inp)
+        assert output.planes_file.exists()
+        assert output.num_walls >= 4

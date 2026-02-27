@@ -4,6 +4,8 @@ For non-parallel wall center-lines, compute 2D intersection points in the
 XZ plane. Extend or trim endpoints to the intersection point if it lies
 along the wall's direction (or close to an endpoint).
 
+Includes T-junction detection and multi-wall junction clustering.
+
 Ref: Cloud2BIM adjust_intersections + extend_to_centerline patterns.
 """
 
@@ -57,6 +59,118 @@ def _nearest_endpoint_info(
     return 1, d1, t
 
 
+def _is_t_junction(
+    ix: np.ndarray,
+    p1: np.ndarray, p2: np.ndarray,
+    snap_tolerance: float,
+) -> bool:
+    """Check if intersection point is a T-junction for segment p1-p2.
+
+    A T-junction means the intersection is near the interior of the segment
+    (not at an endpoint), and one wall's endpoint meets the middle of another.
+    """
+    d = p2 - p1
+    seg_len_sq = np.dot(d, d)
+    if seg_len_sq < 1e-12:
+        return False
+
+    t = float(np.dot(ix - p1, d) / seg_len_sq)
+    # T-junction: intersection is in the interior of the segment (not near endpoints)
+    margin = snap_tolerance / max(np.sqrt(seg_len_sq), 1e-6)
+    return margin < t < (1.0 - margin)
+
+
+def _cluster_nearby_endpoints(walls: list[dict], snap_tolerance: float) -> int:
+    """Cluster nearby wall endpoints and snap them to centroids.
+
+    When 3+ walls meet at roughly the same point, their endpoints
+    should converge to a single junction point.
+
+    Returns number of endpoints clustered.
+    """
+    # Collect all endpoints with references
+    endpoints: list[tuple[np.ndarray, int, int]] = []  # (point, wall_idx, ep_idx)
+    for wi, w in enumerate(walls):
+        cl = w["center_line_2d"]
+        endpoints.append((np.array(cl[0], dtype=float), wi, 0))
+        endpoints.append((np.array(cl[1], dtype=float), wi, 1))
+
+    if len(endpoints) < 3:
+        return 0
+
+    # Greedy clustering
+    used = set()
+    clustered = 0
+
+    for i in range(len(endpoints)):
+        if i in used:
+            continue
+        cluster = [i]
+        used.add(i)
+        for j in range(i + 1, len(endpoints)):
+            if j in used:
+                continue
+            if np.linalg.norm(endpoints[i][0] - endpoints[j][0]) <= snap_tolerance:
+                cluster.append(j)
+                used.add(j)
+
+        if len(cluster) < 2:
+            continue
+
+        # Compute centroid
+        centroid = np.mean([endpoints[k][0] for k in cluster], axis=0)
+
+        # Snap all endpoints in cluster to centroid
+        for k in cluster:
+            _, wi, ei = endpoints[k]
+            walls[wi]["center_line_2d"][ei] = centroid.tolist()
+            clustered += 1
+
+    if clustered > 0:
+        logger.info(f"Junction clustering: {clustered} endpoints snapped to centroids")
+    return clustered
+
+
+def _should_snap_endpoint(
+    ix: np.ndarray,
+    p1: np.ndarray, p2: np.ndarray,
+    snap_tolerance: float,
+    max_ext: float,
+    other_snapping: bool,
+) -> tuple[bool, int, float, str]:
+    """Decide whether to snap a wall endpoint to an intersection point.
+
+    Returns (should_snap, endpoint_index, distance, reason).
+    Reasons: "close", "extend", "trim", "no".
+
+    The key insight: if the OTHER wall is snapping to this intersection,
+    then this wall should also trim its excess endpoint to meet there,
+    even if the intersection is in the interior of this segment.
+    """
+    ep_idx, dist, t = _nearest_endpoint_info(ix, p1, p2)
+
+    # Case 1: intersection is very close to an endpoint → always snap
+    if dist <= snap_tolerance:
+        return True, ep_idx, dist, "close"
+
+    # Case 2: intersection is beyond the endpoint → extend
+    is_beyond = (ep_idx == 0 and t < 0) or (ep_idx == 1 and t > 1)
+    if is_beyond and dist <= max_ext:
+        return True, ep_idx, dist, "extend"
+
+    # Case 3: intersection is inside the segment, but the other wall
+    # is trying to meet here → trim the nearest endpoint to the intersection.
+    # This handles T-junctions where a wall overshoots past a corner.
+    # Only trim up to 20% of wall length to avoid destroying walls.
+    if other_snapping and 0 < t < 1:
+        wall_len = float(np.linalg.norm(p2 - p1))
+        max_trim = wall_len * 0.2
+        if dist <= max_trim:
+            return True, ep_idx, dist, "trim"
+
+    return False, ep_idx, dist, "no"
+
+
 def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
     """Extend/trim wall center-line endpoints to meet at intersection points.
 
@@ -66,17 +180,23 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
        - The intersection is near an endpoint (within snap_tolerance), OR
        - The intersection is along the wall's extension direction and
          the extension is within 50% of the wall's length
-    3. If valid, extend/snap the nearest endpoint to the intersection
+       - The intersection is inside the segment (trim) and the other
+         wall is also snapping (T-junction trim, max 20% of length)
+    3. If valid, extend/trim/snap the nearest endpoint to the intersection
+
+    Also handles:
+    - Multi-wall junctions: cluster nearby endpoints to a centroid
 
     Args:
         walls: list of wall dicts with center_line_2d (modified in-place).
-        snap_tolerance: base tolerance for snapping nearby endpoints.
+        snap_tolerance: tolerance for snapping nearby endpoints (already scaled).
 
     Returns:
         stats dict.
     """
     snapped_count = 0
     extended_count = 0
+    trimmed_count = 0
     n = len(walls)
 
     for i in range(n):
@@ -95,60 +215,65 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
             if ix is None:
                 continue
 
-            # Max extension = 50% of wall length (scale-independent)
             len_i = float(np.linalg.norm(p2 - p1))
             len_j = float(np.linalg.norm(p4 - p3))
             max_ext_i = max(snap_tolerance, len_i * 0.5)
             max_ext_j = max(snap_tolerance, len_j * 0.5)
 
-            # Process wall i
-            ep_idx_i, dist_i, t_i = _nearest_endpoint_info(ix, p1, p2)
-            should_snap_i = False
+            # First pass: check both walls without trim (to know if other is snapping)
+            snap_i_no_trim, ep_i, dist_i, reason_i = _should_snap_endpoint(
+                ix, p1, p2, snap_tolerance, max_ext_i, other_snapping=False,
+            )
+            snap_j_no_trim, ep_j, dist_j, reason_j = _should_snap_endpoint(
+                ix, p3, p4, snap_tolerance, max_ext_j, other_snapping=False,
+            )
 
-            if dist_i <= snap_tolerance:
-                should_snap_i = True
-            elif dist_i <= max_ext_i:
-                # Extend if ix is beyond the endpoint (t < 0 or t > 1)
-                if (ep_idx_i == 0 and t_i < 0) or (ep_idx_i == 1 and t_i > 1):
-                    should_snap_i = True
+            # Second pass: if one side is already snapping, allow trim on the other
+            snap_i, ep_i, dist_i, reason_i = _should_snap_endpoint(
+                ix, p1, p2, snap_tolerance, max_ext_i, other_snapping=snap_j_no_trim,
+            )
+            snap_j, ep_j, dist_j, reason_j = _should_snap_endpoint(
+                ix, p3, p4, snap_tolerance, max_ext_j, other_snapping=snap_i_no_trim or snap_i,
+            )
 
-            if should_snap_i:
-                cl_i[ep_idx_i] = ix.tolist()
-                if dist_i <= snap_tolerance:
+            if snap_i:
+                cl_i[ep_i] = ix.tolist()
+                if reason_i == "close":
                     snapped_count += 1
-                else:
+                elif reason_i == "extend":
                     extended_count += 1
+                elif reason_i == "trim":
+                    trimmed_count += 1
                 logger.debug(
-                    f"Wall {walls[i]['id']} ep{ep_idx_i}: "
-                    f"{'snapped' if dist_i <= snap_tolerance else 'extended'} "
-                    f"{dist_i:.2f} to corner with wall {walls[j]['id']}"
+                    f"Wall {walls[i]['id']} ep{ep_i}: "
+                    f"{reason_i} {dist_i:.2f} to corner with wall {walls[j]['id']}"
                 )
 
-            # Process wall j
-            ep_idx_j, dist_j, t_j = _nearest_endpoint_info(ix, p3, p4)
-            should_snap_j = False
-
-            if dist_j <= snap_tolerance:
-                should_snap_j = True
-            elif dist_j <= max_ext_j:
-                if (ep_idx_j == 0 and t_j < 0) or (ep_idx_j == 1 and t_j > 1):
-                    should_snap_j = True
-
-            if should_snap_j:
-                cl_j[ep_idx_j] = ix.tolist()
-                if dist_j <= snap_tolerance:
+            if snap_j:
+                cl_j[ep_j] = ix.tolist()
+                if reason_j == "close":
                     snapped_count += 1
-                else:
+                elif reason_j == "extend":
                     extended_count += 1
+                elif reason_j == "trim":
+                    trimmed_count += 1
                 logger.debug(
-                    f"Wall {walls[j]['id']} ep{ep_idx_j}: "
-                    f"{'snapped' if dist_j <= snap_tolerance else 'extended'} "
-                    f"{dist_j:.2f} to corner with wall {walls[i]['id']}"
+                    f"Wall {walls[j]['id']} ep{ep_j}: "
+                    f"{reason_j} {dist_j:.2f} to corner with wall {walls[i]['id']}"
                 )
 
-    total = snapped_count + extended_count
+    # Multi-wall junction clustering (use 1.5x tolerance for clustering)
+    junction_clustered = _cluster_nearby_endpoints(walls, snap_tolerance * 1.5)
+
+    total = snapped_count + extended_count + trimmed_count
     logger.info(
         f"Intersection trimming: {snapped_count} snapped, "
-        f"{extended_count} extended ({total} total)"
+        f"{extended_count} extended, {trimmed_count} trimmed, "
+        f"{junction_clustered} junction-clustered ({total} total)"
     )
-    return {"snapped_endpoints": snapped_count, "extended_endpoints": extended_count}
+    return {
+        "snapped_endpoints": snapped_count,
+        "extended_endpoints": extended_count,
+        "trimmed_endpoints": trimmed_count,
+        "junction_clustered": junction_clustered,
+    }
