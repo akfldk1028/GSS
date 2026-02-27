@@ -44,7 +44,13 @@ s06b_output = PlaneRegularizationOutput(
     num_walls=3,
 )
 output_data = s06b_output.model_dump()
-s07_input = IfcExportInput(**output_data)
-print(f"s07 input from s06b output: OK (planes_file={s07_input.planes_file})")
+# s07 now requires walls_file (mandatory), planes_file is optional fallback
+s07_input = IfcExportInput(
+    walls_file=output_data["walls_file"],
+    planes_file=output_data.get("planes_file"),
+    boundaries_file=output_data.get("boundaries_file"),
+    spaces_file=output_data.get("spaces_file"),
+)
+print(f"s07 input from s06b output: OK (walls_file={s07_input.walls_file})")
 
 print("\nAll pipeline integration checks passed!")

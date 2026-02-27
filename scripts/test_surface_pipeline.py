@@ -238,7 +238,14 @@ def run_ifc(data_root: Path) -> dict:
         default_slab_thickness=0.3,
     )
     step = IfcExportStep(config=config, data_root=data_root)
+    s06b_dir = data_root / "interim" / "s06b_plane_regularization"
+    walls_file = s06b_dir / "walls.json"
+    spaces_file = s06b_dir / "spaces.json"
+    if not walls_file.exists():
+        raise FileNotFoundError(f"walls.json not found at {walls_file}; run s06b first")
     inputs = IfcExportInput(
+        walls_file=walls_file,
+        spaces_file=spaces_file if spaces_file.exists() else None,
         planes_file=data_root / "interim" / "s06_planes" / "planes.json",
         boundaries_file=data_root / "interim" / "s06_planes" / "boundaries.json",
     )

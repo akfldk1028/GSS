@@ -1,0 +1,314 @@
+"""Wall builder — center-line based wall geometry (Cloud2BIM pattern).
+
+Coordinate mapping:
+  Manhattan center_line_2d [mx, mz] → IFC XY plane (mx, mz)
+  Manhattan height_range [y_min, y_max] → IFC Z axis (wall height)
+"""
+
+from __future__ import annotations
+
+import logging
+import math
+from typing import Any
+
+import ifcopenshell.api
+import ifcopenshell.guid
+
+from ._ifc_builder import IfcContext
+
+logger = logging.getLogger(__name__)
+
+
+def create_wall_from_centerline(
+    ctx: IfcContext,
+    wall_data: dict,
+    scale: float,
+    *,
+    wall_material_name: str = "Concrete",
+    default_thickness: float = 0.2,
+    create_axis: bool = True,
+    create_material_layers: bool = True,
+    create_wall_type: bool = True,
+    create_property_set: bool = True,
+) -> Any | None:
+    """Create an IfcWall from a walls.json entry.
+
+    Args:
+        ctx: IFC context with file and shared entities.
+        wall_data: Dict with center_line_2d, thickness, height_range, etc.
+        scale: coordinate_scale divisor for meter conversion.
+        Other kwargs control optional IFC features.
+
+    Returns:
+        IfcWall entity, or None if geometry is degenerate.
+    """
+    center_line = wall_data.get("center_line_2d")
+    if not center_line or len(center_line) < 2:
+        return None
+
+    height_range = wall_data.get("height_range")
+    if not height_range or len(height_range) < 2:
+        return None
+
+    thickness = wall_data.get("thickness", default_thickness)
+    wall_id = wall_data.get("id", 0)
+    is_synthetic = wall_data.get("synthetic", False)
+
+    # Manhattan coords → IFC (meters)
+    # center_line_2d: [[mx1, mz1], [mx2, mz2]]
+    # IFC XY plane: start=(mx1/s, mz1/s), end=(mx2/s, mz2/s)
+    sx, sy = center_line[0][0] / scale, center_line[0][1] / scale
+    ex, ey = center_line[1][0] / scale, center_line[1][1] / scale
+
+    y_min, y_max = height_range[0] / scale, height_range[1] / scale
+    wall_height = y_max - y_min
+    wall_thickness = thickness / scale
+
+    if wall_height < 0.01 or wall_thickness < 0.001:
+        logger.warning(f"Wall {wall_id}: degenerate geometry, skipping")
+        return None
+
+    dx = ex - sx
+    dy = ey - sy
+    wall_length = math.sqrt(dx * dx + dy * dy)
+    if wall_length < 0.01:
+        logger.warning(f"Wall {wall_id}: zero length, skipping")
+        return None
+
+    ifc = ctx.ifc
+
+    # --- Wall placement at z=y_min ---
+    wall_placement = _create_local_placement(ifc, z=y_min)
+
+    # --- Axis representation (center-line as Curve2D) ---
+    representations = []
+    if create_axis and ctx.axis_context is not None:
+        axis_repr = _create_axis_representation(ifc, ctx.axis_context, sx, sy, ex, ey)
+        representations.append(axis_repr)
+
+    # --- Body representation (IfcRectangleProfileDef + extrusion) ---
+    body_repr = _create_body_representation(
+        ifc, ctx.body_context, sx, sy, ex, ey, wall_length, wall_thickness, wall_height
+    )
+    representations.append(body_repr)
+
+    product_shape = ifc.createIfcProductDefinitionShape(None, None, representations)
+
+    # --- IfcWall entity ---
+    wall_name = f"Wall_{wall_id}"
+    if is_synthetic:
+        wall_name = f"Wall_{wall_id}_Synthetic"
+
+    wall = ifcopenshell.api.run(
+        "root.create_entity", ifc, ifc_class="IfcWall", name=wall_name
+    )
+    wall.OwnerHistory = ctx.owner_history
+    wall.ObjectPlacement = wall_placement
+    wall.Representation = product_shape
+
+    # --- Material layer set ---
+    if create_material_layers:
+        _assign_material_layer_set(ctx, wall, wall_thickness, wall_material_name)
+
+    # --- Wall type ---
+    if create_wall_type:
+        _assign_wall_type(ctx, wall, wall_thickness)
+
+    # --- Property set ---
+    if create_property_set:
+        _create_property_set(ctx, wall, wall_data)
+
+    return wall
+
+
+# ---------- Internal helpers ----------
+
+
+def _create_local_placement(ifc: Any, z: float = 0.0) -> Any:
+    """Create IfcLocalPlacement at (0, 0, z)."""
+    point = ifc.createIfcCartesianPoint([0.0, 0.0, float(z)])
+    axis = ifc.createIfcDirection([0.0, 0.0, 1.0])
+    ref = ifc.createIfcDirection([1.0, 0.0, 0.0])
+    placement_3d = ifc.createIfcAxis2Placement3D(point, axis, ref)
+    return ifc.createIfcLocalPlacement(None, placement_3d)
+
+
+def _create_axis_representation(
+    ifc: Any, axis_ctx: Any, sx: float, sy: float, ex: float, ey: float
+) -> Any:
+    """Axis representation: center-line polyline in 2D."""
+    p1 = ifc.createIfcCartesianPoint([float(sx), float(sy)])
+    p2 = ifc.createIfcCartesianPoint([float(ex), float(ey)])
+    polyline = ifc.createIfcPolyline([p1, p2])
+    return ifc.createIfcShapeRepresentation(
+        axis_ctx, "Axis", "Curve2D", [polyline]
+    )
+
+
+def _create_body_representation(
+    ifc: Any,
+    body_ctx: Any,
+    sx: float,
+    sy: float,
+    ex: float,
+    ey: float,
+    wall_length: float,
+    wall_thickness: float,
+    wall_height: float,
+) -> Any:
+    """Body representation: IfcRectangleProfileDef extruded upward."""
+    # Rectangle center = midpoint of center-line
+    mid_x = (sx + ex) / 2.0
+    mid_y = (sy + ey) / 2.0
+    center = ifc.createIfcCartesianPoint([float(mid_x), float(mid_y)])
+
+    # Direction along wall
+    dx = ex - sx
+    dy = ey - sy
+    mag = math.sqrt(dx * dx + dy * dy)
+    dir_x = float(dx / mag)
+    dir_y = float(dy / mag)
+    ref_dir = ifc.createIfcDirection([dir_x, dir_y])
+
+    placement_2d = ifc.createIfcAxis2Placement2D(center, ref_dir)
+
+    profile = ifc.createIfcRectangleProfileDef(
+        "AREA", "Wall Profile", placement_2d, float(wall_length), float(wall_thickness)
+    )
+
+    # Extrude upward (z direction)
+    ext_dir = ifc.createIfcDirection([0.0, 0.0, 1.0])
+    solid = ifc.createIfcExtrudedAreaSolid(profile, None, ext_dir, float(wall_height))
+
+    return ifc.createIfcShapeRepresentation(
+        body_ctx, "Body", "SweptSolid", [solid]
+    )
+
+
+def _assign_material_layer_set(
+    ctx: IfcContext,
+    wall: Any,
+    thickness: float,
+    material_name: str,
+) -> None:
+    """Create or reuse IfcMaterialLayerSet and assign to wall."""
+    # Round thickness for cache key
+    t_key = round(thickness, 4)
+
+    if t_key not in ctx._material_layer_set_cache:
+        ifc = ctx.ifc
+        material = ifc.createIfcMaterial(Name=material_name)
+        layer = ifc.createIfcMaterialLayer(
+            Material=material,
+            LayerThickness=float(thickness),
+            Name="Core",
+        )
+        thickness_mm = int(round(thickness * 1000))
+        layer_set = ifc.createIfcMaterialLayerSet(
+            MaterialLayers=[layer],
+            LayerSetName=f"{material_name} Wall - {thickness_mm} mm",
+        )
+        ctx._material_layer_set_cache[t_key] = layer_set
+
+    layer_set = ctx._material_layer_set_cache[t_key]
+
+    ifc = ctx.ifc
+    usage = ifc.createIfcMaterialLayerSetUsage(
+        ForLayerSet=layer_set,
+        LayerSetDirection="AXIS2",
+        DirectionSense="POSITIVE",
+        OffsetFromReferenceLine=-(thickness / 2.0),
+    )
+    ifc.createIfcRelAssociatesMaterial(
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=ctx.owner_history,
+        RelatedObjects=[wall],
+        RelatingMaterial=usage,
+    )
+
+
+def _assign_wall_type(ctx: IfcContext, wall: Any, thickness: float) -> None:
+    """Create or reuse IfcWallType for this thickness."""
+    t_key = round(thickness, 4)
+
+    if t_key not in ctx._wall_type_cache:
+        ifc = ctx.ifc
+        thickness_mm = int(round(thickness * 1000))
+        wall_type = ifc.createIfcWallType(
+            GlobalId=ifcopenshell.guid.new(),
+            OwnerHistory=ctx.owner_history,
+            Name=f"Wall_{thickness_mm}mm",
+            Description=f"Wall - {thickness_mm} mm",
+            PredefinedType="SOLIDWALL",
+        )
+        # Declare type in project
+        ifc.createIfcRelDeclares(
+            GlobalId=ifcopenshell.guid.new(),
+            OwnerHistory=ctx.owner_history,
+            RelatingContext=ctx.project,
+            RelatedDefinitions=[wall_type],
+        )
+        ctx._wall_type_cache[t_key] = wall_type
+
+    wall_type = ctx._wall_type_cache[t_key]
+    ctx.ifc.createIfcRelDefinesByType(
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=ctx.owner_history,
+        RelatedObjects=[wall],
+        RelatingType=wall_type,
+    )
+
+
+def _create_property_set(ctx: IfcContext, wall: Any, wall_data: dict) -> None:
+    """Attach a Pset_WallCommon-like property set."""
+    ifc = ctx.ifc
+    props = []
+
+    # IsExternal — always True for our single-storey scan
+    props.append(
+        ifc.createIfcPropertySingleValue(
+            Name="IsExternal",
+            NominalValue=ifc.create_entity("IfcBoolean", True),
+        )
+    )
+
+    # Synthetic flag
+    if wall_data.get("synthetic", False):
+        props.append(
+            ifc.createIfcPropertySingleValue(
+                Name="Synthetic",
+                NominalValue=ifc.create_entity("IfcBoolean", True),
+            )
+        )
+
+    # Source (detected vs synthetic)
+    source = "synthetic" if wall_data.get("synthetic", False) else "detected"
+    props.append(
+        ifc.createIfcPropertySingleValue(
+            Name="Source",
+            NominalValue=ifc.create_entity("IfcLabel", source),
+        )
+    )
+
+    # Normal axis
+    normal_axis = wall_data.get("normal_axis", "")
+    if normal_axis:
+        props.append(
+            ifc.createIfcPropertySingleValue(
+                Name="NormalAxis",
+                NominalValue=ifc.create_entity("IfcLabel", normal_axis),
+            )
+        )
+
+    pset = ifc.createIfcPropertySet(
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=ctx.owner_history,
+        Name="Pset_WallCommon",
+        HasProperties=props,
+    )
+    ifc.createIfcRelDefinesByProperties(
+        GlobalId=ifcopenshell.guid.new(),
+        OwnerHistory=ctx.owner_history,
+        RelatedObjects=[wall],
+        RelatingPropertyDefinition=pset,
+    )

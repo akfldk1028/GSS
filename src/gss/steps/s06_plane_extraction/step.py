@@ -477,14 +477,10 @@ class PlaneExtractionStep(
         for idx, rp in enumerate(raw_planes):
             inlier_points = rp["inlier_points"]
 
-            # Skip boundary for "other" planes (not used in BIM export)
-            if rp["label"] == "other":
-                boundary_3d: list[list[float]] = []
-            else:
-                boundary_3d = _extract_boundary(
-                    inlier_points, rp["normal"],
-                    self.config.simplify_tolerance, rp["label"],
-                )
+            boundary_3d = _extract_boundary(
+                inlier_points, rp["normal"],
+                self.config.simplify_tolerance, rp["label"],
+            )
 
             if R_manhattan is not None and boundary_3d:
                 # Inverse transform: R^T (since R is orthogonal, R^-1 = R^T)

@@ -87,3 +87,65 @@ def sample_depth_data(data_root: Path) -> tuple[Path, Path]:
     with open(poses_file, "w") as f:
         json.dump(poses_data, f)
     return depth_dir, poses_file
+
+
+@pytest.fixture
+def sample_walls_json(data_root: Path) -> Path:
+    """Create sample walls.json for testing (center-line format from s06b)."""
+    walls = [
+        {
+            "id": 0, "plane_ids": [1],
+            "center_line_2d": [[-1.0, 3.0], [1.0, 3.0]],
+            "thickness": 0.2, "height_range": [-0.5, 2.5],
+            "normal_axis": "z",
+        },
+        {
+            "id": 1, "plane_ids": [4],
+            "center_line_2d": [[-1.0, -1.0], [-1.0, 3.0]],
+            "thickness": 0.2, "height_range": [-0.5, 2.5],
+            "normal_axis": "x",
+        },
+        {
+            "id": 2, "plane_ids": [5],
+            "center_line_2d": [[1.0, -1.0], [1.0, 3.0]],
+            "thickness": 0.2, "height_range": [-0.5, 2.5],
+            "normal_axis": "x",
+        },
+        {
+            "id": 3, "plane_ids": [7],
+            "center_line_2d": [[-1.0, -1.0], [1.0, -1.0]],
+            "thickness": 0.2, "height_range": [-0.5, 2.5],
+            "normal_axis": "z",
+            "synthetic": True,
+        },
+    ]
+    s06b_dir = data_root / "interim" / "s06b_plane_regularization"
+    s06b_dir.mkdir(parents=True, exist_ok=True)
+    walls_file = s06b_dir / "walls.json"
+    with open(walls_file, "w") as f:
+        json.dump(walls, f)
+    return walls_file
+
+
+@pytest.fixture
+def sample_spaces_json(data_root: Path) -> Path:
+    """Create sample spaces.json for testing (from s06b)."""
+    spaces_data = {
+        "manhattan_rotation": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        "coordinate_scale": 1.0,
+        "spaces": [
+            {
+                "id": 0,
+                "boundary_2d": [[-1.0, 3.0], [1.0, 3.0], [1.0, -1.0], [-1.0, -1.0], [-1.0, 3.0]],
+                "area": 8.0,
+                "floor_height": -0.5,
+                "ceiling_height": 2.5,
+            }
+        ],
+    }
+    s06b_dir = data_root / "interim" / "s06b_plane_regularization"
+    s06b_dir.mkdir(parents=True, exist_ok=True)
+    spaces_file = s06b_dir / "spaces.json"
+    with open(spaces_file, "w") as f:
+        json.dump(spaces_data, f)
+    return spaces_file

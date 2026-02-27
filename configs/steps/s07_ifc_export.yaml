@@ -1,5 +1,26 @@
 ifc_version: IFC4
 project_name: GSS_BIM
 building_name: Building
+storey_name: Ground Floor
 default_wall_thickness: 0.2
 default_slab_thickness: 0.3
+
+# Author / organization
+author_name: GSS
+organization_name: GSS Pipeline
+
+# Material names
+wall_material_name: Concrete
+slab_material_name: Concrete
+
+# Feature toggles
+create_wall_types: true
+create_material_layers: true
+create_property_sets: true
+create_axis_representation: true
+create_spaces: true
+create_slabs: true
+include_synthetic_walls: true
+
+# Scale override (null = use coordinate_scale from spaces.json)
+scale_override: null

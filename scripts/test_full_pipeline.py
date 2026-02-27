@@ -201,7 +201,21 @@ def phase_s07(planes_file: Path, boundaries_file: Path) -> Path:
 
     cfg = IfcExportConfig(project_name="GSS_Replica_room0")
     step = IfcExportStep(config=cfg, data_root=DATA_ROOT)
-    inp = IfcExportInput(planes_file=planes_file, boundaries_file=boundaries_file)
+
+    # Prefer walls.json from s06b if available
+    s06b_dir = DATA_ROOT / "interim" / "s06b_plane_regularization"
+    walls_file = s06b_dir / "walls.json"
+    spaces_file = s06b_dir / "spaces.json"
+
+    if walls_file.exists():
+        inp = IfcExportInput(
+            walls_file=walls_file,
+            spaces_file=spaces_file if spaces_file.exists() else None,
+            planes_file=planes_file,
+            boundaries_file=boundaries_file,
+        )
+    else:
+        raise FileNotFoundError(f"walls.json not found at {walls_file}; run s06b first")
 
     assert step.validate_inputs(inp), "s07 validate_inputs failed"
 

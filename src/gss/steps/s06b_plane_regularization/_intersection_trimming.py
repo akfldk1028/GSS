@@ -171,6 +171,110 @@ def _should_snap_endpoint(
     return False, ep_idx, dist, "no"
 
 
+def _constrained_snap(
+    ix: np.ndarray, wall: dict, ep_idx: int,
+) -> list[float]:
+    """Snap endpoint to intersection, but constrain to wall's axis.
+
+    For axis-aligned walls in Manhattan space:
+    - X-normal wall: keep X constant, only change Z (wall extends along Z)
+    - Z-normal wall: keep Z constant, only change X (wall extends along X)
+
+    This prevents walls from "leaning" when endpoints are snapped to corners.
+    """
+    axis = wall.get("normal_axis")
+    cl = wall["center_line_2d"]
+    result = ix.copy()
+
+    if axis == "x":
+        # X-normal wall: compute wall's center X from both endpoints, keep it
+        wall_x = (cl[0][0] + cl[1][0]) / 2.0
+        result[0] = wall_x
+    elif axis == "z":
+        # Z-normal wall: compute wall's center Z from both endpoints, keep it
+        wall_z = (cl[0][1] + cl[1][1]) / 2.0
+        result[1] = wall_z
+
+    return result.tolist()
+
+
+def _enforce_axis_alignment(walls: list[dict]) -> int:
+    """Post-process: enforce that axis-aligned walls have constant normal coordinate.
+
+    X-normal walls → both endpoints get same X (average).
+    Z-normal walls → both endpoints get same Z (average).
+
+    Returns number of walls corrected.
+    """
+    corrected = 0
+    for w in walls:
+        cl = w["center_line_2d"]
+        axis = w.get("normal_axis")
+        if axis == "x":
+            avg_x = (cl[0][0] + cl[1][0]) / 2.0
+            if abs(cl[0][0] - cl[1][0]) > 1e-6:
+                cl[0][0] = avg_x
+                cl[1][0] = avg_x
+                corrected += 1
+        elif axis == "z":
+            avg_z = (cl[0][1] + cl[1][1]) / 2.0
+            if abs(cl[0][1] - cl[1][1]) > 1e-6:
+                cl[0][1] = avg_z
+                cl[1][1] = avg_z
+                corrected += 1
+    return corrected
+
+
+def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
+    """Reconnect wall endpoints at corners after axis alignment.
+
+    For each pair of perpendicular walls (X-normal meets Z-normal),
+    the corner point should be at (X_wall_x, Z_wall_z). Find the
+    nearest endpoints and snap them to this ideal corner.
+
+    Returns number of endpoints reconnected.
+    """
+    reconnected = 0
+    n = len(walls)
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if walls[i]["normal_axis"] == walls[j]["normal_axis"]:
+                continue
+
+            # Determine which is X-normal and which is Z-normal
+            if walls[i]["normal_axis"] == "x":
+                w_x, w_z = walls[i], walls[j]
+            else:
+                w_x, w_z = walls[j], walls[i]
+
+            cl_x = w_x["center_line_2d"]
+            cl_z = w_z["center_line_2d"]
+
+            # X-normal wall's X position (constant after axis alignment)
+            wall_x = cl_x[0][0]
+            # Z-normal wall's Z position (constant after axis alignment)
+            wall_z = cl_z[0][1]
+
+            # Ideal corner point
+            corner = np.array([wall_x, wall_z])
+
+            # Find nearest endpoint of each wall to this corner
+            for cl in [cl_x, cl_z]:
+                d0 = np.linalg.norm(np.array(cl[0]) - corner)
+                d1 = np.linalg.norm(np.array(cl[1]) - corner)
+                min_d = min(d0, d1)
+                ep = 0 if d0 <= d1 else 1
+
+                if min_d <= snap_tolerance:
+                    cl[ep] = corner.tolist()
+                    reconnected += 1
+
+    if reconnected > 0:
+        logger.info(f"Corner reconnection: {reconnected} endpoints snapped to ideal corners")
+    return reconnected
+
+
 def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
     """Extend/trim wall center-line endpoints to meet at intersection points.
 
@@ -182,9 +286,11 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
          the extension is within 50% of the wall's length
        - The intersection is inside the segment (trim) and the other
          wall is also snapping (T-junction trim, max 20% of length)
-    3. If valid, extend/trim/snap the nearest endpoint to the intersection
+    3. If valid, extend/trim/snap the nearest endpoint to the intersection,
+       constrained to the wall's axis (X-normal keeps X, Z-normal keeps Z)
 
     Also handles:
+    - Axis alignment enforcement: ensures walls stay straight after snapping
     - Multi-wall junctions: cluster nearby endpoints to a centroid
 
     Args:
@@ -237,7 +343,7 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
             )
 
             if snap_i:
-                cl_i[ep_i] = ix.tolist()
+                cl_i[ep_i] = _constrained_snap(ix, walls[i], ep_i)
                 if reason_i == "close":
                     snapped_count += 1
                 elif reason_i == "extend":
@@ -250,7 +356,7 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
                 )
 
             if snap_j:
-                cl_j[ep_j] = ix.tolist()
+                cl_j[ep_j] = _constrained_snap(ix, walls[j], ep_j)
                 if reason_j == "close":
                     snapped_count += 1
                 elif reason_j == "extend":
@@ -262,8 +368,22 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
                     f"{reason_j} {dist_j:.2f} to corner with wall {walls[i]['id']}"
                 )
 
+    # Enforce axis alignment (fix any remaining lean from clustering or rounding)
+    axis_corrected = _enforce_axis_alignment(walls)
+    if axis_corrected > 0:
+        logger.info(f"Axis alignment: corrected {axis_corrected} walls")
+
+    # Reconnect corners: snap endpoints to ideal (wall_x, wall_z) corners
+    corner_reconnected = _reconnect_corners(walls, snap_tolerance * 2.0)
+
     # Multi-wall junction clustering (use 1.5x tolerance for clustering)
     junction_clustered = _cluster_nearby_endpoints(walls, snap_tolerance * 1.5)
+
+    # Re-enforce axis alignment after clustering
+    _enforce_axis_alignment(walls)
+
+    # Final corner reconnection
+    _reconnect_corners(walls, snap_tolerance * 2.0)
 
     total = snapped_count + extended_count + trimmed_count
     logger.info(
