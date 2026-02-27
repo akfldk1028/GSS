@@ -59,12 +59,15 @@ class TestPipelineRunner:
 
     def test_import_all_steps(self):
         modules = [
+            "gss.steps.s00_import_ply",
             "gss.steps.s01_extract_frames",
             "gss.steps.s02_colmap",
             "gss.steps.s03_gaussian_splatting",
+            "gss.steps.s03_planargs",
             "gss.steps.s04_depth_render",
             "gss.steps.s05_tsdf_fusion",
             "gss.steps.s06_plane_extraction",
+            "gss.steps.s06b_plane_regularization",
             "gss.steps.s07_ifc_export",
         ]
         for module in modules:

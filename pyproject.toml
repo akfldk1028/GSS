@@ -24,6 +24,9 @@ dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
 
+    # Phase 0-1: SfM
+    "pycolmap>=0.6",
+
     # Phase 1: 3DGS (gsplat + torch are installed separately due to CUDA)
     # pip install torch --index-url https://download.pytorch.org/whl/cu121
     # pip install gsplat
@@ -48,6 +51,7 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.1",
     "mypy>=1.0",
+    "matplotlib>=3.5",
 ]
 gpu = [
     # Install manually:
