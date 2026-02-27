@@ -24,6 +24,8 @@ def create_wall_from_centerline(
     wall_data: dict,
     scale: float,
     *,
+    floor_z: float | None = None,
+    ceiling_z: float | None = None,
     wall_material_name: str = "Concrete",
     default_thickness: float = 0.2,
     create_axis: bool = True,
@@ -37,6 +39,8 @@ def create_wall_from_centerline(
         ctx: IFC context with file and shared entities.
         wall_data: Dict with center_line_2d, thickness, height_range, etc.
         scale: coordinate_scale divisor for meter conversion.
+        floor_z: Uniform floor Z in meters (overrides per-wall height_range min).
+        ceiling_z: Uniform ceiling Z in meters (overrides per-wall height_range max).
         Other kwargs control optional IFC features.
 
     Returns:
@@ -60,7 +64,9 @@ def create_wall_from_centerline(
     sx, sy = center_line[0][0] / scale, center_line[0][1] / scale
     ex, ey = center_line[1][0] / scale, center_line[1][1] / scale
 
-    y_min, y_max = height_range[0] / scale, height_range[1] / scale
+    # Use uniform storey heights when available (Cloud2BIM: walls span floor→ceiling)
+    y_min = floor_z if floor_z is not None else height_range[0] / scale
+    y_max = ceiling_z if ceiling_z is not None else height_range[1] / scale
     wall_height = y_max - y_min
     wall_thickness = thickness / scale
 

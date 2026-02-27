@@ -2,19 +2,61 @@
 
 Primary path: walls.json + spaces.json → center-line based IFC
 Legacy fallback: planes.json + boundaries.json → boundary_3d based IFC
+
+Cloud2BIM pattern:
+  - Walls are extruded from storey floor_height to ceiling_height (uniform).
+  - Synthetic walls overlapping detected walls are deduplicated.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import ClassVar
+
+import numpy as np
 
 from gss.core.step_base import BaseStep
 from .config import IfcExportConfig
 from .contracts import IfcExportInput, IfcExportOutput
 
 logger = logging.getLogger(__name__)
+
+
+def _deduplicate_walls(walls: list[dict]) -> list[dict]:
+    """Remove synthetic walls that overlap with detected walls.
+
+    A synthetic wall is considered duplicate if its center-line midpoint
+    is within 0.5 units of a detected wall's center-line midpoint.
+    """
+    detected = [w for w in walls if not w.get("synthetic")]
+    synthetic = [w for w in walls if w.get("synthetic")]
+
+    result = list(detected)
+    for sw in synthetic:
+        s_cl = sw.get("center_line_2d")
+        if not s_cl or len(s_cl) != 2:
+            result.append(sw)
+            continue
+        s0, s1 = np.array(s_cl[0]), np.array(s_cl[1])
+
+        is_dup = False
+        for dw in detected:
+            d_cl = dw.get("center_line_2d")
+            if not d_cl or len(d_cl) != 2:
+                continue
+            d0, d1 = np.array(d_cl[0]), np.array(d_cl[1])
+            fwd = np.linalg.norm(s0 - d0) + np.linalg.norm(s1 - d1)
+            rev = np.linalg.norm(s0 - d1) + np.linalg.norm(s1 - d0)
+            if min(fwd, rev) < 0.5:
+                is_dup = True
+                break
+        if is_dup:
+            logger.info(f"Dedup: synthetic wall {sw.get('id')} overlaps detected wall")
+        else:
+            result.append(sw)
+    return result
 
 
 class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
@@ -60,6 +102,24 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
         # Apply scale override if configured
         scale = self.config.scale_override or coordinate_scale
 
+        # --- Deduplicate synthetic walls overlapping detected walls ---
+        walls_data = _deduplicate_walls(walls_data)
+        logger.info(f"After dedup: {len(walls_data)} walls")
+
+        # --- Extract uniform storey heights from spaces ---
+        floor_z: float | None = None
+        ceiling_z: float | None = None
+        if spaces_data:
+            floor_heights = [s["floor_height"] for s in spaces_data if "floor_height" in s]
+            ceiling_heights = [s["ceiling_height"] for s in spaces_data if "ceiling_height" in s]
+            if floor_heights:
+                floor_z = min(floor_heights) / scale
+            if ceiling_heights:
+                ceiling_z = max(ceiling_heights) / scale
+            logger.info(
+                f"Storey heights: floor_z={floor_z:.3f}m, ceiling_z={ceiling_z:.3f}m"
+            )
+
         # --- Create IFC file + hierarchy ---
         ctx = create_ifc_file(
             version=self.config.ifc_version,
@@ -86,6 +146,8 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                 ctx,
                 wall_data,
                 scale,
+                floor_z=floor_z,
+                ceiling_z=ceiling_z,
                 wall_material_name=self.config.wall_material_name,
                 default_thickness=self.config.default_wall_thickness,
                 create_axis=self.config.create_axis_representation,
