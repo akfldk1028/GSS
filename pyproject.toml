@@ -28,6 +28,9 @@ dependencies = [
     # pip install torch --index-url https://download.pytorch.org/whl/cu121
     # pip install gsplat
 
+    # Phase 0: PLY import (Gaussian splat custom attributes)
+    "plyfile>=0.9",
+
     # Phase 1: TSDF
     "open3d>=0.17",
 

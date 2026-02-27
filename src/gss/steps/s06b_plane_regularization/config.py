@@ -26,6 +26,7 @@ class PlaneRegularizationConfig(BaseModel):
     )
     expected_room_size: float = Field(
         5.0,
+        gt=0,
         description="Expected typical room dimension in meters (used for auto scale estimation).",
     )
 
@@ -37,7 +38,7 @@ class PlaneRegularizationConfig(BaseModel):
 
     # C. Wall thickness
     max_wall_thickness: float = Field(1.0, description="Max distance between parallel planes to pair as wall faces (meters)")
-    default_wall_thickness: float = Field(0.2, description="Default thickness for unpaired walls (meters)")
+    default_wall_thickness: float = Field(0.2, gt=0, description="Default thickness for unpaired walls (meters)")
     min_parallel_overlap: float = Field(0.3, description="Min overlap fraction between parallel walls to pair")
 
     # C2. Wall closure

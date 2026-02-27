@@ -10,9 +10,10 @@ import pytest
 @pytest.fixture
 def data_root(tmp_path: Path) -> Path:
     """Create a temporary data root with standard directory structure."""
-    for subdir in ["raw", "interim/s01_frames", "interim/s02_colmap",
-                    "interim/s03_gaussians", "interim/s04_depth_maps",
-                    "interim/s05_tsdf", "interim/s06_planes", "processed"]:
+    for subdir in ["raw", "interim/s00_import_ply", "interim/s01_frames",
+                    "interim/s02_colmap", "interim/s03_gaussians",
+                    "interim/s04_depth_maps", "interim/s05_tsdf",
+                    "interim/s06_planes", "processed"]:
         (tmp_path / subdir).mkdir(parents=True, exist_ok=True)
     return tmp_path
 

@@ -47,13 +47,17 @@ def _load_manhattan_rotation(s06_dir: Path) -> np.ndarray | None:
     path = s06_dir / "manhattan_alignment.json"
     if not path.exists():
         return None
-    with open(path) as f:
-        data = json.load(f)
-    R = np.asarray(data["manhattan_rotation"], dtype=float)
-    if R.shape != (3, 3):
-        logger.warning(f"Invalid manhattan_rotation shape {R.shape}, ignoring")
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        R = np.asarray(data["manhattan_rotation"], dtype=float)
+        if R.shape != (3, 3):
+            logger.warning(f"Invalid manhattan_rotation shape {R.shape}, ignoring")
+            return None
+        return R
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
+        logger.error(f"Failed to load manhattan_alignment.json: {e}; proceeding without Manhattan rotation")
         return None
-    return R
 
 
 def _transform_to_manhattan(planes: list[dict], R: np.ndarray) -> None:
@@ -170,7 +174,23 @@ def _estimate_scale(planes: list[dict], expected_room_size: float = 5.0) -> floa
         return 1.0
 
     scale = median_dim / expected_room_size
-    return max(scale, 0.1)  # floor at 0.1 to avoid degenerate values
+    scale = max(scale, 0.1)  # floor at 0.1 to avoid degenerate values
+
+    if scale > 100.0:
+        logger.warning(
+            f"Scale estimation yielded extreme value {scale:.1f} (median_dim={median_dim:.1f}, "
+            f"expected_room_size={expected_room_size:.1f}). Capping at 100.0. "
+            "Consider using scale_mode='manual' with a known coordinate_scale."
+        )
+        scale = 100.0
+    elif scale < 0.5:
+        logger.warning(
+            f"Scale estimation yielded low value {scale:.2f} (median_dim={median_dim:.2f}, "
+            f"expected_room_size={expected_room_size:.1f}). Scene may already be in metric units; "
+            "consider scale_mode='metric'."
+        )
+
+    return scale
 
 
 def _transform_walls_from_manhattan(
@@ -232,13 +252,18 @@ class PlaneRegularizationStep(
         R = _load_manhattan_rotation(s06_dir)
 
         # --- Transform to Manhattan space ---
-        if R is not None:
+        manhattan_aligned = R is not None
+        if manhattan_aligned:
             _transform_to_manhattan(planes, R)
             logger.info("Transformed to Manhattan-aligned coordinates")
         else:
             logger.warning(
-                "No manhattan_alignment.json found; "
-                "processing in original coordinates (results may be less accurate)"
+                "No Manhattan rotation available — processing in original coordinates. "
+                "Affected modules: normal snapping (may snap to wrong axes), "
+                "wall thickness pairing (may miss parallel pairs), "
+                "wall closure (AABB will be axis-misaligned), "
+                "space detection (polygonization may fail). "
+                "Results may be significantly degraded for non-axis-aligned scenes."
             )
 
         # --- Scale estimation ---
@@ -268,13 +293,18 @@ class PlaneRegularizationStep(
             f"min_area={eff_min_area:.2f}, default_thickness={eff_default_thickness:.2f}"
         )
 
+        # --- Stats collection ---
+        stats: dict = {"manhattan_aligned": manhattan_aligned, "scale": float(scale)}
+
         # --- A. Normal Snapping ---
+        normal_stats: dict = {"snapped_walls": 0, "snapped_horiz": 0, "skipped": 0}
         if self.config.enable_normal_snapping:
             from ._snap_normals import snap_normals
-            snap_normals(planes, threshold_deg=self.config.normal_snap_threshold)
+            normal_stats = snap_normals(planes, threshold_deg=self.config.normal_snap_threshold)
             # Reproject boundaries onto snapped planes
             for p in planes:
                 _reproject_boundary(p)
+        stats["normal_snapping"] = normal_stats
 
         # --- B. Height Snapping ---
         height_stats: dict = {"floor_heights": [], "ceiling_heights": []}
@@ -286,6 +316,10 @@ class PlaneRegularizationStep(
             for p in planes:
                 if p["label"] in ("floor", "ceiling"):
                     _reproject_boundary(p)
+        stats["height_snapping"] = {
+            "floor_clusters": len(height_stats.get("floor_heights", [])),
+            "ceiling_clusters": len(height_stats.get("ceiling_heights", [])),
+        }
 
         # --- C. Wall Thickness ---
         walls: list[dict] = []
@@ -297,8 +331,15 @@ class PlaneRegularizationStep(
                 default_wall_thickness=eff_default_thickness,
                 min_parallel_overlap=self.config.min_parallel_overlap,
             )
+        paired_count = sum(1 for w in walls if len(w.get("plane_ids", [])) == 2)
+        stats["wall_thickness"] = {
+            "total_walls": len(walls),
+            "paired": paired_count,
+            "unpaired": len(walls) - paired_count,
+        }
 
         # --- C2. Wall Closure ---
+        walls_before_closure = len(walls)
         if self.config.enable_wall_closure and walls:
             from ._wall_closure import synthesize_missing_walls
             walls, new_planes = synthesize_missing_walls(
@@ -312,11 +353,13 @@ class PlaneRegularizationStep(
                 default_thickness=eff_default_thickness,
             )
             planes.extend(new_planes)
+        stats["wall_closure"] = {"synthesized": len(walls) - walls_before_closure}
 
         # --- D. Intersection Trimming ---
+        trim_stats: dict = {"snapped_endpoints": 0, "extended_endpoints": 0}
         if self.config.enable_intersection_trimming and walls:
             from ._intersection_trimming import trim_intersections
-            trim_intersections(walls, snap_tolerance=eff_snap_tol)
+            trim_stats = trim_intersections(walls, snap_tolerance=eff_snap_tol)
 
             # Rebuild wall boundaries from trimmed center-lines
             plane_by_id = {p["id"]: p for p in planes}
@@ -324,6 +367,7 @@ class PlaneRegularizationStep(
                 for pid in w["plane_ids"]:
                     if pid in plane_by_id:
                         _rebuild_wall_boundary(plane_by_id[pid], w)
+        stats["intersection_trimming"] = trim_stats
 
         # --- E. Space Detection ---
         spaces: list[dict] = []
@@ -336,6 +380,7 @@ class PlaneRegularizationStep(
                 min_area=eff_min_area,
                 snap_tolerance=eff_snap_tol,
             )
+        stats["space_detection"] = {"num_spaces": len(spaces)}
 
         # --- F. Opening Detection (Phase 2) ---
         if self.config.enable_opening_detection and walls:
@@ -400,6 +445,10 @@ class PlaneRegularizationStep(
         if R is not None:
             with open(output_dir / "manhattan_alignment.json", "w") as f:
                 json.dump({"manhattan_rotation": R.tolist()}, f, indent=2)
+
+        # 6. Diagnostic stats
+        with open(output_dir / "stats.json", "w") as f:
+            json.dump(stats, f, indent=2)
 
         num_walls = sum(1 for p in planes if p["label"] == "wall")
         num_spaces = len(spaces)

@@ -1,0 +1,6 @@
+min_opacity: 0.5
+remove_outliers: true
+outlier_nb_neighbors: 20
+outlier_std_ratio: 2.0
+estimate_normals: true
+voxel_downsample: 0.0

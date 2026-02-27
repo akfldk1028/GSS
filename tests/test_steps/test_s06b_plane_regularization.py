@@ -617,3 +617,189 @@ class TestPlaneRegularizationStep:
         output = step.execute(inp)
         assert output.planes_file.exists()
         assert output.num_walls >= 4
+
+
+# ---------------------------------------------------------------------------
+# Robustness: Config validation
+# ---------------------------------------------------------------------------
+
+class TestConfigValidation:
+    def test_config_rejects_zero_room_size(self):
+        """expected_room_size=0 should be rejected by Pydantic gt=0."""
+        with pytest.raises(Exception):  # ValidationError
+            PlaneRegularizationConfig(expected_room_size=0)
+
+    def test_config_rejects_negative_room_size(self):
+        with pytest.raises(Exception):
+            PlaneRegularizationConfig(expected_room_size=-1.0)
+
+    def test_config_rejects_zero_wall_thickness(self):
+        with pytest.raises(Exception):
+            PlaneRegularizationConfig(default_wall_thickness=0)
+
+    def test_config_rejects_negative_wall_thickness(self):
+        with pytest.raises(Exception):
+            PlaneRegularizationConfig(default_wall_thickness=-0.1)
+
+    def test_config_accepts_valid_values(self):
+        cfg = PlaneRegularizationConfig(expected_room_size=3.0, default_wall_thickness=0.15)
+        assert cfg.expected_room_size == 3.0
+        assert cfg.default_wall_thickness == 0.15
+
+
+# ---------------------------------------------------------------------------
+# Robustness: Corrupt Manhattan JSON fallback
+# ---------------------------------------------------------------------------
+
+class TestCorruptManhattanJson:
+    def test_corrupt_json_returns_none(self, data_root: Path):
+        """Corrupt manhattan_alignment.json should gracefully return None."""
+        from gss.steps.s06b_plane_regularization.step import _load_manhattan_rotation
+        s06_dir = data_root / "interim" / "s06_planes"
+        s06_dir.mkdir(parents=True, exist_ok=True)
+        path = s06_dir / "manhattan_alignment.json"
+        path.write_text("{invalid json!!")
+        R = _load_manhattan_rotation(s06_dir)
+        assert R is None
+
+    def test_missing_key_returns_none(self, data_root: Path):
+        """JSON without 'manhattan_rotation' key should return None."""
+        from gss.steps.s06b_plane_regularization.step import _load_manhattan_rotation
+        s06_dir = data_root / "interim" / "s06_planes"
+        s06_dir.mkdir(parents=True, exist_ok=True)
+        path = s06_dir / "manhattan_alignment.json"
+        path.write_text('{"something_else": 42}')
+        R = _load_manhattan_rotation(s06_dir)
+        assert R is None
+
+    def test_wrong_shape_returns_none(self, data_root: Path):
+        """Non-3x3 matrix should return None."""
+        from gss.steps.s06b_plane_regularization.step import _load_manhattan_rotation
+        s06_dir = data_root / "interim" / "s06_planes"
+        s06_dir.mkdir(parents=True, exist_ok=True)
+        path = s06_dir / "manhattan_alignment.json"
+        path.write_text('{"manhattan_rotation": [[1, 0], [0, 1]]}')
+        R = _load_manhattan_rotation(s06_dir)
+        assert R is None
+
+
+# ---------------------------------------------------------------------------
+# Robustness: Wall closure without floor
+# ---------------------------------------------------------------------------
+
+class TestWallClosureWithoutFloor:
+    def test_wall_closure_uses_wall_aabb_fallback(self):
+        """When no floor exists, wall AABB should be used for closure."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        # 3 walls but NO floor plane
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+            {"id": 1, "plane_ids": [1], "center_line_2d": [[0, 4], [5, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "z"},
+            {"id": 2, "plane_ids": [2], "center_line_2d": [[5, 4], [5, 0]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+            {"id": 1, "label": "wall", "normal": np.array([0, 0, 1]), "d": -4.0,
+             "boundary_3d": np.array([[0, 0, 4], [5, 0, 4], [5, 3, 4], [0, 3, 4]])},
+            {"id": 2, "label": "wall", "normal": np.array([1, 0, 0]), "d": -5.0,
+             "boundary_3d": np.array([[5, 0, 0], [5, 3, 0], [5, 3, 4], [5, 0, 4]])},
+            # No floor!
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0, max_gap_ratio=0.3,
+        )
+        # Should still attempt closure using wall AABB
+        assert len(updated_walls) >= 3
+        # At least one synthetic wall from AABB fallback
+        synthetic = [w for w in updated_walls if w.get("synthetic")]
+        assert len(synthetic) >= 1
+
+    def test_wall_closure_skips_with_no_floor_and_few_walls(self):
+        """With < 3 wall endpoints, closure should skip entirely."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[], ceiling_heights=[],
+            scale=1.0,
+        )
+        # Only 1 wall with 2 endpoints → AABB has < 3 unique points, should skip
+        assert len(new_planes) == 0
+
+
+# ---------------------------------------------------------------------------
+# Robustness: Scale estimation bounds
+# ---------------------------------------------------------------------------
+
+class TestScaleEstimationBounds:
+    def test_extreme_scale_capped_at_100(self):
+        """Scale > 100 should be capped."""
+        from gss.steps.s06b_plane_regularization.step import _estimate_scale
+        # Giant scene: 1000 units for a 5m room → raw scale = 200
+        planes = [
+            {"id": 0, "label": "wall", "boundary_3d": np.array([
+                [0, 0, 0], [0, 500, 0], [0, 500, 1000], [0, 0, 1000],
+            ])},
+            {"id": 1, "label": "floor", "boundary_3d": np.array([
+                [0, 0, 0], [1000, 0, 0], [1000, 0, 1000], [0, 0, 1000],
+            ])},
+        ]
+        scale = _estimate_scale(planes, expected_room_size=5.0)
+        assert scale <= 100.0
+
+    def test_low_scale_still_allowed(self):
+        """Scale < 0.5 should warn but not be rejected (just capped at 0.1)."""
+        from gss.steps.s06b_plane_regularization.step import _estimate_scale
+        # Small scene: 1 unit for a 5m room → raw scale = 0.2
+        planes = [
+            {"id": 0, "label": "wall", "boundary_3d": np.array([
+                [0, 0, 0], [0, 0.6, 0], [0, 0.6, 1], [0, 0, 1],
+            ])},
+            {"id": 1, "label": "floor", "boundary_3d": np.array([
+                [0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1],
+            ])},
+        ]
+        scale = _estimate_scale(planes, expected_room_size=5.0)
+        assert 0.1 <= scale < 0.5
+
+
+# ---------------------------------------------------------------------------
+# Robustness: Stats output
+# ---------------------------------------------------------------------------
+
+class TestStatsOutput:
+    def test_stats_json_created(self, data_root: Path, manhattan_planes_json: Path, manhattan_boundaries_json: Path):
+        """Full step run should produce stats.json."""
+        from gss.steps.s06b_plane_regularization.step import PlaneRegularizationStep
+
+        cfg = PlaneRegularizationConfig()
+        step = PlaneRegularizationStep(config=cfg, data_root=data_root)
+        inp = PlaneRegularizationInput(
+            planes_file=manhattan_planes_json,
+            boundaries_file=manhattan_boundaries_json,
+        )
+        step.execute(inp)
+        stats_file = data_root / "interim" / "s06b_plane_regularization" / "stats.json"
+        assert stats_file.exists()
+        with open(stats_file) as f:
+            stats = json.load(f)
+        assert "manhattan_aligned" in stats
+        assert "scale" in stats
+        assert "normal_snapping" in stats
+        assert "wall_thickness" in stats
+        assert "wall_closure" in stats
+        assert "intersection_trimming" in stats
+        assert "space_detection" in stats

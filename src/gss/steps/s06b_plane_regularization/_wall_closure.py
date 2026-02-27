@@ -34,6 +34,29 @@ def _floor_boundary_xz(planes: list[dict]) -> np.ndarray | None:
     return np.vstack(floor_pts)
 
 
+def _wall_centerline_aabb_xz(walls: list[dict]) -> np.ndarray | None:
+    """Compute AABB from wall center-line endpoints projected to XZ.
+
+    Fallback when floor boundary is unavailable: uses the bounding box of
+    all wall center-line endpoints as a rough room outline estimate.
+    """
+    pts = []
+    for w in walls:
+        cl = w.get("center_line_2d")
+        if cl and len(cl) == 2:
+            pts.append(cl[0])
+            pts.append(cl[1])
+    if len(pts) < 3:
+        return None
+    pts_arr = np.array(pts)
+    xmin, zmin = pts_arr.min(axis=0)
+    xmax, zmax = pts_arr.max(axis=0)
+    # Return 4 corners of AABB (enough for convex hull / oriented bbox)
+    return np.array([
+        [xmin, zmin], [xmax, zmin], [xmax, zmax], [xmin, zmax],
+    ])
+
+
 def _oriented_bbox_edges(pts_2d: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
     """Compute axis-aligned bounding box of convex hull and return its 4 edges.
 
@@ -152,8 +175,12 @@ def synthesize_missing_walls(
 
     floor_pts = _floor_boundary_xz(planes)
     if floor_pts is None or len(floor_pts) < 3:
-        logger.info("Wall closure: no floor boundary available, skipping")
-        return walls, []
+        # Fallback: use wall center-line AABB as rough room outline
+        floor_pts = _wall_centerline_aabb_xz(walls)
+        if floor_pts is None or len(floor_pts) < 3:
+            logger.info("Wall closure: no floor boundary and insufficient walls for AABB, skipping")
+            return walls, []
+        logger.info("Wall closure: no floor boundary — using wall center-line AABB as fallback")
 
     edges = _oriented_bbox_edges(floor_pts)
 
