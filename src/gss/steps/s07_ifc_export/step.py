@@ -346,7 +346,7 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
                 ifc_space.Representation = product_shape
 
             ifcopenshell.api.run(
-                "spatial.assign_container", ifc, products=[ifc_space], relating_structure=storey
+                "aggregate.assign_object", ifc, products=[ifc_space], relating_object=storey
             )
             num_spaces += 1
 

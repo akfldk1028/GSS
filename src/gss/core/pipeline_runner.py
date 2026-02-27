@@ -16,14 +16,14 @@ logger = logging.getLogger(__name__)
 
 def load_pipeline_config(config_path: Path) -> PipelineConfig:
     """Load and validate pipeline.yaml."""
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f)
     return PipelineConfig(**raw)
 
 
 def load_step_config(config_path: Path, config_class: type[BaseModel]) -> BaseModel:
     """Load a step-specific YAML config into its Pydantic model."""
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     return config_class(**raw)
 
