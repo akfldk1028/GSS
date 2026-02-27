@@ -47,7 +47,7 @@ def _plane_height(plane: dict) -> float:
         n·p + d = 0  →  ±y + d = 0  →  y = ∓d
     More generally: height = -d / normal_y
     """
-    ny = plane["normal"][1] if hasattr(plane["normal"], "__getitem__") else plane["normal"][1]
+    ny = plane["normal"][1]
     if abs(ny) < 1e-6:
         # Not truly horizontal; use boundary centroid fallback
         bnd = plane.get("boundary_3d")
@@ -89,7 +89,7 @@ def snap_heights(planes: list[dict], tolerance: float = 0.5) -> dict:
                 old_h = heights[j]
                 if abs(old_h - mean_height) > 1e-6:
                     p = planes[pi]
-                    ny = p["normal"][1] if hasattr(p["normal"], "__getitem__") else p["normal"][1]
+                    ny = p["normal"][1]
                     if abs(ny) > 1e-6:
                         p["d"] = -mean_height * ny
                     logger.debug(

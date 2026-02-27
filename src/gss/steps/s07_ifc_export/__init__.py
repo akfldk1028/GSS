@@ -1,3 +1,4 @@
-from .step import IfcExportStep
-from .contracts import IfcExportInput, IfcExportOutput
-from .config import IfcExportConfig
+from .step import IfcExportStep as IfcExportStep
+from .contracts import IfcExportInput as IfcExportInput
+from .contracts import IfcExportOutput as IfcExportOutput
+from .config import IfcExportConfig as IfcExportConfig
