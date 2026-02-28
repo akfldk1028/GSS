@@ -105,7 +105,24 @@
       "Bash(cd:*)",
       "Bash(gh search:*)",
       "Bash(git clone:*)",
-      "Bash(git status:*)"
+      "Bash(git status:*)",
+      "Bash(pytest:*)",
+      "Bash(grep:*)",
+      "Bash(git log:*)",
+      "mcp__exa__web_search_exa",
+      "Bash(git push:*)",
+      "WebFetch(domain:www.nature.com)",
+      "WebFetch(domain:aecmag.com)",
+      "WebFetch(domain:docs.blender.org)",
+      "WebFetch(domain:isprs-archives.copernicus.org)",
+      "WebFetch(domain:www.mdpi.com)",
+      "WebFetch(domain:hal.science)",
+      "WebFetch(domain:pythoncvc.net)",
+      "Bash(/c/Users/User/anaconda3/python:*)",
+      "Bash(ruff check:*)",
+      "WebFetch(domain:hippogriff.github.io)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs"
     ]
   }
 }

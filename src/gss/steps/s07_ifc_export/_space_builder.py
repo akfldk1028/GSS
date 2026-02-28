@@ -22,6 +22,8 @@ def create_space(
     ctx: IfcContext,
     space_data: dict,
     scale: float,
+    *,
+    storey: Any | None = None,
 ) -> Any | None:
     """Create an IfcSpace from a spaces.json entry.
 
@@ -88,8 +90,9 @@ def create_space(
     ifc_space.Representation = product_shape
 
     # Aggregate to storey
+    target_storey = storey if storey is not None else ctx.storey
     ifcopenshell.api.run(
-        "aggregate.assign_object", ifc, products=[ifc_space], relating_object=ctx.storey
+        "aggregate.assign_object", ifc, products=[ifc_space], relating_object=target_storey
     )
 
     # Property set: GrossFloorArea

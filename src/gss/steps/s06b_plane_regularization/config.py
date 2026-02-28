@@ -31,7 +31,13 @@ class PlaneRegularizationConfig(BaseModel):
     )
 
     # A. Normal snapping
+    normal_mode: Literal["manhattan", "cluster"] = Field(
+        "manhattan",
+        description="Wall normal discovery mode: 'manhattan' snaps to ±X/±Z, "
+        "'cluster' discovers dominant directions from data",
+    )
     normal_snap_threshold: float = Field(20.0, description="Max angle (degrees) to snap normal to axis")
+    cluster_angle_tolerance: float = Field(15.0, description="Max angle (degrees) between normals to cluster together")
 
     # B. Height snapping
     height_cluster_tolerance: float = Field(0.5, description="Max height diff to cluster floor/ceiling planes (meters)")
@@ -50,3 +56,22 @@ class PlaneRegularizationConfig(BaseModel):
 
     # E. Space detection
     min_space_area: float = Field(1.0, description="Min area (sq meters) for a valid room polygon")
+
+    # G. Exterior classification
+    enable_exterior_classification: bool = Field(
+        False, description="Classify walls as interior/exterior based on convex hull"
+    )
+
+    # H. Roof detection
+    enable_roof_detection: bool = Field(
+        False, description="Detect roof planes above ceiling (exterior scans)"
+    )
+
+    # F. Opening detection
+    opening_histogram_resolution: float = Field(0.05, description="Histogram bin size (meters)")
+    opening_histogram_threshold: float = Field(0.7, description="Fraction of peak density for gap detection")
+    opening_min_width: float = Field(0.3, description="Min opening width (meters)")
+    opening_min_height: float = Field(0.3, description="Min opening height (meters)")
+    opening_door_sill_max: float = Field(0.1, description="Max sill height to classify as door (meters)")
+    opening_door_min_height: float = Field(1.8, description="Min height for door classification (meters)")
+    opening_min_points: int = Field(100, description="Min inlier points per wall for analysis")

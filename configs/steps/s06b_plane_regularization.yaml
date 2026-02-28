@@ -35,3 +35,12 @@ snap_tolerance: 0.5                # scene units
 
 # E. Space detection
 min_space_area: 1.0                # square scene units
+
+# F. Opening detection (disabled by default — requires surface_points.ply)
+opening_histogram_resolution: 0.05 # bin size (meters)
+opening_histogram_threshold: 0.7   # fraction of peak density
+opening_min_width: 0.3             # meters
+opening_min_height: 0.3            # meters
+opening_door_sill_max: 0.1        # meters (below = door)
+opening_door_min_height: 1.8       # meters
+opening_min_points: 100            # min inlier points per wall

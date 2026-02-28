@@ -103,4 +103,93 @@ def snap_heights(planes: list[dict], tolerance: float = 0.5) -> dict:
                 f"height={mean_height:.3f}"
             )
 
+    # Group into storeys
+    stats["storeys"] = _group_storeys(
+        stats.get("floor_heights", []),
+        stats.get("ceiling_heights", []),
+    )
+
     return stats
+
+
+def _group_storeys(
+    floor_heights: list[float],
+    ceiling_heights: list[float],
+) -> list[dict]:
+    """Pair floor and ceiling heights into storey definitions.
+
+    Algorithm:
+    1. Sort all floor and ceiling heights
+    2. Greedily match each floor to the nearest ceiling above it
+    3. Name storeys sequentially (Ground Floor, 1st Floor, ...)
+
+    Returns:
+        List of storey dicts: [{name, floor_height, ceiling_height, elevation}, ...]
+        Sorted by elevation (lowest first).
+    """
+    if not floor_heights and not ceiling_heights:
+        return []
+
+    # Handle single-storey (most common case)
+    if len(floor_heights) <= 1 and len(ceiling_heights) <= 1:
+        floor_h = floor_heights[0] if floor_heights else 0.0
+        ceiling_h = ceiling_heights[0] if ceiling_heights else floor_h + 3.0
+        return [{
+            "name": "Ground Floor",
+            "floor_height": float(floor_h),
+            "ceiling_height": float(ceiling_h),
+            "elevation": float(floor_h),
+        }]
+
+    # Multi-storey: pair floor_i with ceiling_j where ceiling_j > floor_i
+    floors_sorted = sorted(floor_heights)
+    ceilings_sorted = sorted(ceiling_heights)
+
+    storeys = []
+    used_ceilings: set[int] = set()
+
+    for floor_h in floors_sorted:
+        best_ceiling_idx = None
+        best_ceiling_h = None
+        best_gap = float("inf")
+
+        for ci, ceiling_h in enumerate(ceilings_sorted):
+            if ci in used_ceilings:
+                continue
+            gap = ceiling_h - floor_h
+            if gap > 0.5 and gap < best_gap:  # ceiling must be above floor by >0.5
+                best_gap = gap
+                best_ceiling_idx = ci
+                best_ceiling_h = ceiling_h
+
+        if best_ceiling_idx is not None:
+            used_ceilings.add(best_ceiling_idx)
+            storeys.append({
+                "floor_height": float(floor_h),
+                "ceiling_height": float(best_ceiling_h),
+                "elevation": float(floor_h),
+            })
+
+    # If we couldn't pair floors, try to infer from ceiling gaps
+    if not storeys:
+        # Fallback: treat all as single storey
+        floor_h = min(floors_sorted) if floors_sorted else 0.0
+        ceiling_h = max(ceilings_sorted) if ceilings_sorted else floor_h + 3.0
+        storeys = [{
+            "floor_height": float(floor_h),
+            "ceiling_height": float(ceiling_h),
+            "elevation": float(floor_h),
+        }]
+
+    # Sort by elevation and assign names
+    storeys.sort(key=lambda s: s["elevation"])
+
+    storey_names = ["Ground Floor"] + [f"Floor {i}" for i in range(1, 100)]
+    for i, s in enumerate(storeys):
+        s["name"] = storey_names[min(i, len(storey_names) - 1)]
+
+    logger.info(
+        f"Storey grouping: {len(storeys)} storeys detected "
+        f"({', '.join(s['name'] for s in storeys)})"
+    )
+    return storeys

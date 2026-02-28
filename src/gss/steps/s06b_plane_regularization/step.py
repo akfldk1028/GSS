@@ -1,13 +1,14 @@
 """Step 06b: Plane regularization — geometric cleanup between RANSAC and IFC.
 
-Orchestrates sub-modules A→B→C→C2→D→E→(F) in order:
-  A. Normal snapping (walls → ±X/±Z, floors/ceilings → ±Y)
+Orchestrates sub-modules A→B→C→C2→D→E→G→(F) in order:
+  A. Normal snapping (manhattan: ±X/±Z, cluster: data-driven axes)
   B. Height snapping (cluster floor/ceiling d-values)
   C. Wall thickness (parallel pair detection + center-lines)
   C2. Wall closure (synthesize missing walls from floor boundary)
   D. Intersection trimming (snap center-line endpoints to corners)
   E. Space detection (polygonize center-lines → room boundaries)
-  F. Opening detection (Phase 2, disabled by default)
+  G. Exterior classification (interior/exterior wall labeling, disabled by default)
+  F. Opening detection (disabled by default)
 
 All processing in Manhattan-aligned Y-up space. Results transformed back
 to original coordinates for backward-compatible output.
@@ -300,7 +301,12 @@ class PlaneRegularizationStep(
         normal_stats: dict = {"snapped_walls": 0, "snapped_horiz": 0, "skipped": 0}
         if self.config.enable_normal_snapping:
             from ._snap_normals import snap_normals
-            normal_stats = snap_normals(planes, threshold_deg=self.config.normal_snap_threshold)
+            normal_stats = snap_normals(
+                planes,
+                threshold_deg=self.config.normal_snap_threshold,
+                normal_mode=self.config.normal_mode,
+                cluster_angle_tolerance=self.config.cluster_angle_tolerance,
+            )
             # Reproject boundaries onto snapped planes
             for p in planes:
                 _reproject_boundary(p)
@@ -351,6 +357,7 @@ class PlaneRegularizationStep(
                 max_gap_ratio=self.config.max_closure_gap_ratio,
                 use_floor_ceiling_hints=self.config.use_floor_ceiling_hints,
                 default_thickness=eff_default_thickness,
+                normal_mode=self.config.normal_mode,
             )
             planes.extend(new_planes)
         stats["wall_closure"] = {"synthesized": len(walls) - walls_before_closure}
@@ -382,10 +389,75 @@ class PlaneRegularizationStep(
             )
         stats["space_detection"] = {"num_spaces": len(spaces)}
 
-        # --- F. Opening Detection (Phase 2) ---
+        # --- G. Exterior Classification ---
+        exterior_stats: dict = {"exterior": 0, "interior": 0}
+        if self.config.enable_exterior_classification and walls:
+            from ._exterior_classification import classify_walls as _classify_walls
+            exterior_stats = _classify_walls(walls)
+        stats["exterior_classification"] = exterior_stats
+
+        # --- G2. Building Footprint ---
+        building_footprint: list[list[float]] | None = None
+        if self.config.enable_exterior_classification and walls:
+            from ._exterior_classification import extract_building_footprint
+            building_footprint = extract_building_footprint(walls)
+            if building_footprint:
+                logger.info(f"Building footprint: {len(building_footprint) - 1} vertices")
+
+        # --- H. Roof Detection ---
+        roof_stats: dict = {"num_roof_planes": 0, "roof_type": "none"}
+        if self.config.enable_roof_detection:
+            from ._roof_detection import detect_roof_planes
+            roof_stats = detect_roof_planes(
+                planes,
+                ceiling_heights=height_stats.get("ceiling_heights", []),
+            )
+        stats["roof_detection"] = roof_stats
+
+        # --- F. Opening Detection ---
+        opening_stats: dict = {"num_openings": 0, "num_doors": 0, "num_windows": 0}
         if self.config.enable_opening_detection and walls:
-            from ._opening_detection import detect_openings
-            detect_openings(planes, walls)
+            from ._opening_detection import detect_openings, OpeningConfig
+
+            # Find surface point cloud from s06 or TSDF output
+            surface_points_path = None
+            for candidate in [
+                self.data_root / "interim" / "s06_planes" / "surface_points.ply",
+                self.data_root / "interim" / "s05_tsdf_fusion" / "surface_points.ply",
+            ]:
+                if candidate.exists():
+                    surface_points_path = candidate
+                    break
+
+            if surface_points_path:
+                opening_cfg = OpeningConfig(
+                    histogram_resolution=self.config.opening_histogram_resolution,
+                    histogram_threshold=self.config.opening_histogram_threshold,
+                    min_opening_width=self.config.opening_min_width,
+                    min_opening_height=self.config.opening_min_height,
+                    door_sill_max=self.config.opening_door_sill_max,
+                    door_min_height=self.config.opening_door_min_height,
+                    min_points_for_analysis=self.config.opening_min_points,
+                )
+                all_openings = detect_openings(
+                    planes, walls,
+                    surface_points_path=surface_points_path,
+                    config=opening_cfg,
+                    scale=scale,
+                    manhattan_rotation=R,
+                )
+                opening_stats["num_openings"] = len(all_openings)
+                opening_stats["num_doors"] = sum(
+                    1 for o in all_openings if o.get("type") == "door"
+                )
+                opening_stats["num_windows"] = sum(
+                    1 for o in all_openings if o.get("type") == "window"
+                )
+            else:
+                logger.warning(
+                    "Opening detection enabled but no surface_points.ply found"
+                )
+        stats["opening_detection"] = opening_stats
 
         # --- Transform back to original coordinates ---
         if R is not None:
@@ -432,11 +504,19 @@ class PlaneRegularizationStep(
         # 4. Spaces.json (room polygons in Manhattan XZ plane)
         spaces_file = None
         if spaces:
-            spaces_output = {
+            spaces_output: dict = {
                 "manhattan_rotation": R.tolist() if R is not None else None,
                 "coordinate_scale": float(scale),
                 "spaces": spaces,
             }
+            # Include storey definitions if available
+            storey_defs = height_stats.get("storeys", [])
+            if storey_defs:
+                spaces_output["storeys"] = storey_defs
+                logger.info(f"Including {len(storey_defs)} storey definitions in spaces.json")
+            # Include building footprint if available
+            if building_footprint:
+                spaces_output["building_footprint"] = building_footprint
             spaces_file = output_dir / "spaces.json"
             with open(spaces_file, "w") as f:
                 json.dump(spaces_output, f, indent=2)

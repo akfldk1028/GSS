@@ -270,11 +270,12 @@ def _create_property_set(ctx: IfcContext, wall: Any, wall_data: dict) -> None:
     ifc = ctx.ifc
     props = []
 
-    # IsExternal — always True for our single-storey scan
+    # IsExternal — from s06b exterior classification if available
+    is_external = wall_data.get("is_exterior", True)
     props.append(
         ifc.createIfcPropertySingleValue(
             Name="IsExternal",
-            NominalValue=ifc.create_entity("IfcBoolean", True),
+            NominalValue=ifc.create_entity("IfcBoolean", is_external),
         )
     )
 

@@ -4,6 +4,8 @@ For non-parallel wall center-lines, compute 2D intersection points in the
 XZ plane. Extend or trim endpoints to the intersection point if it lies
 along the wall's direction (or close to an endpoint).
 
+Supports both Manhattan (±X/±Z) and arbitrary-angle walls.
+
 Includes T-junction detection and multi-wall junction clustering.
 
 Ref: Cloud2BIM adjust_intersections + extend_to_centerline patterns.
@@ -16,6 +18,41 @@ import logging
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _is_manhattan(wall: dict) -> bool:
+    """Check if wall is Manhattan-aligned (normal_axis is "x" or "z")."""
+    axis = wall.get("normal_axis", "")
+    return axis in ("x", "z")
+
+
+def _walls_are_parallel(w1: dict, w2: dict, threshold: float = 0.98) -> bool:
+    """Check if two walls are parallel by comparing their directions.
+
+    For Manhattan walls: same normal_axis means parallel.
+    For oblique walls: compare direction vectors.
+    """
+    # Manhattan shortcut
+    a1 = w1.get("normal_axis", "")
+    a2 = w2.get("normal_axis", "")
+    if a1 in ("x", "z") and a2 in ("x", "z"):
+        return a1 == a2
+
+    # General case: compare wall directions
+    d1 = _wall_direction(w1)
+    d2 = _wall_direction(w2)
+    return abs(float(np.dot(d1, d2))) > threshold
+
+
+def _wall_direction(wall: dict) -> np.ndarray:
+    """Get wall's direction as a unit vector (along center-line)."""
+    cl = wall["center_line_2d"]
+    p1, p2 = np.array(cl[0], dtype=float), np.array(cl[1], dtype=float)
+    d = p2 - p1
+    length = np.linalg.norm(d)
+    if length < 1e-12:
+        return np.array([1.0, 0.0])
+    return d / length
 
 
 def _line_intersection_2d(
@@ -174,42 +211,59 @@ def _should_snap_endpoint(
 def _constrained_snap(
     ix: np.ndarray, wall: dict, ep_idx: int,
 ) -> list[float]:
-    """Snap endpoint to intersection, but constrain to wall's axis.
+    """Snap endpoint to intersection, constrained to wall's direction line.
 
-    For axis-aligned walls in Manhattan space:
+    For Manhattan walls:
     - X-normal wall: keep X constant, only change Z (wall extends along Z)
     - Z-normal wall: keep Z constant, only change X (wall extends along X)
 
-    This prevents walls from "leaning" when endpoints are snapped to corners.
+    For arbitrary-angle walls:
+    - Project ix onto the infinite line through the wall's center-line
     """
-    axis = wall.get("normal_axis")
+    axis = wall.get("normal_axis", "")
     cl = wall["center_line_2d"]
-    result = ix.copy()
 
     if axis == "x":
         # X-normal wall: compute wall's center X from both endpoints, keep it
         wall_x = (cl[0][0] + cl[1][0]) / 2.0
-        result[0] = wall_x
+        return [wall_x, ix[1]]
     elif axis == "z":
         # Z-normal wall: compute wall's center Z from both endpoints, keep it
         wall_z = (cl[0][1] + cl[1][1]) / 2.0
-        result[1] = wall_z
+        return [ix[0], wall_z]
+    else:
+        # General case: project ix onto the wall's center-line (infinite line)
+        p1 = np.array(cl[0], dtype=float)
+        p2 = np.array(cl[1], dtype=float)
+        d = p2 - p1
+        d_len_sq = np.dot(d, d)
+        if d_len_sq < 1e-12:
+            return ix.tolist()
+        # Anchor is the other endpoint (the one not being snapped)
+        anchor = np.array(cl[1 - ep_idx], dtype=float)
+        t = np.dot(ix - anchor, d / d_len_sq * np.linalg.norm(d))
+        d_norm = d / np.sqrt(d_len_sq)
+        return (anchor + t * d_norm).tolist()
 
-    return result.tolist()
 
+def _enforce_wall_straightness(walls: list[dict]) -> int:
+    """Post-process: enforce that walls maintain straight center-lines.
 
-def _enforce_axis_alignment(walls: list[dict]) -> int:
-    """Post-process: enforce that axis-aligned walls have constant normal coordinate.
+    For Manhattan walls:
+    - X-normal walls → both endpoints get same X (average)
+    - Z-normal walls → both endpoints get same Z (average)
 
-    X-normal walls → both endpoints get same X (average).
-    Z-normal walls → both endpoints get same Z (average).
+    For oblique walls:
+    - Project endpoints onto the line defined by the wall's normal_vector
+    - Ensures the wall stays on its plane
 
     Returns number of walls corrected.
     """
     corrected = 0
     for w in walls:
         cl = w["center_line_2d"]
-        axis = w.get("normal_axis")
+        axis = w.get("normal_axis", "")
+
         if axis == "x":
             avg_x = (cl[0][0] + cl[1][0]) / 2.0
             if abs(cl[0][0] - cl[1][0]) > 1e-6:
@@ -222,15 +276,33 @@ def _enforce_axis_alignment(walls: list[dict]) -> int:
                 cl[0][1] = avg_z
                 cl[1][1] = avg_z
                 corrected += 1
+        elif "normal_vector" in w:
+            # Oblique wall: ensure both endpoints lie on the same line
+            # perpendicular to normal_vector
+            nv = np.array(w["normal_vector"])  # 2D normal in XZ
+            p1 = np.array(cl[0], dtype=float)
+            p2 = np.array(cl[1], dtype=float)
+            # Project both endpoints onto the normal direction
+            d1 = np.dot(p1, nv)
+            d2 = np.dot(p2, nv)
+            avg_d = (d1 + d2) / 2.0
+            if abs(d1 - d2) > 1e-6:
+                # Move each point to avg_d along normal
+                cl[0] = (p1 + (avg_d - d1) * nv).tolist()
+                cl[1] = (p2 + (avg_d - d2) * nv).tolist()
+                corrected += 1
+
     return corrected
 
 
 def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
-    """Reconnect wall endpoints at corners after axis alignment.
+    """Reconnect wall endpoints at corners after straightness enforcement.
 
-    For each pair of perpendicular walls (X-normal meets Z-normal),
-    the corner point should be at (X_wall_x, Z_wall_z). Find the
-    nearest endpoints and snap them to this ideal corner.
+    For Manhattan walls:
+    - The corner of X-normal and Z-normal walls is at (X_wall_x, Z_wall_z)
+
+    For general walls:
+    - Compute the intersection of the two wall lines and snap nearby endpoints
 
     Returns number of endpoints reconnected.
     """
@@ -239,36 +311,60 @@ def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
 
     for i in range(n):
         for j in range(i + 1, n):
-            if walls[i]["normal_axis"] == walls[j]["normal_axis"]:
+            if _walls_are_parallel(walls[i], walls[j]):
                 continue
 
-            # Determine which is X-normal and which is Z-normal
-            if walls[i]["normal_axis"] == "x":
-                w_x, w_z = walls[i], walls[j]
+            a1 = walls[i].get("normal_axis", "")
+            a2 = walls[j].get("normal_axis", "")
+
+            # Manhattan fast path
+            if a1 in ("x", "z") and a2 in ("x", "z") and a1 != a2:
+                if a1 == "x":
+                    w_x, w_z = walls[i], walls[j]
+                else:
+                    w_x, w_z = walls[j], walls[i]
+
+                cl_x = w_x["center_line_2d"]
+                cl_z = w_z["center_line_2d"]
+
+                wall_x = cl_x[0][0]
+                wall_z = cl_z[0][1]
+                corner = np.array([wall_x, wall_z])
+
+                for cl in [cl_x, cl_z]:
+                    d0 = np.linalg.norm(np.array(cl[0]) - corner)
+                    d1 = np.linalg.norm(np.array(cl[1]) - corner)
+                    min_d = min(d0, d1)
+                    ep = 0 if d0 <= d1 else 1
+
+                    if min_d <= snap_tolerance:
+                        cl[ep] = corner.tolist()
+                        reconnected += 1
             else:
-                w_x, w_z = walls[j], walls[i]
+                # General case: compute line-line intersection
+                cl_i = walls[i]["center_line_2d"]
+                cl_j = walls[j]["center_line_2d"]
+                p1 = np.array(cl_i[0], dtype=float)
+                p2 = np.array(cl_i[1], dtype=float)
+                p3 = np.array(cl_j[0], dtype=float)
+                p4 = np.array(cl_j[1], dtype=float)
 
-            cl_x = w_x["center_line_2d"]
-            cl_z = w_z["center_line_2d"]
+                ix = _line_intersection_2d(p1, p2, p3, p4)
+                if ix is None:
+                    continue
 
-            # X-normal wall's X position (constant after axis alignment)
-            wall_x = cl_x[0][0]
-            # Z-normal wall's Z position (constant after axis alignment)
-            wall_z = cl_z[0][1]
+                # Check if any endpoint is close enough to reconnect
+                for cl in [cl_i, cl_j]:
+                    ep0 = np.array(cl[0], dtype=float)
+                    ep1 = np.array(cl[1], dtype=float)
+                    d0 = float(np.linalg.norm(ep0 - ix))
+                    d1 = float(np.linalg.norm(ep1 - ix))
+                    min_d = min(d0, d1)
+                    ep = 0 if d0 <= d1 else 1
 
-            # Ideal corner point
-            corner = np.array([wall_x, wall_z])
-
-            # Find nearest endpoint of each wall to this corner
-            for cl in [cl_x, cl_z]:
-                d0 = np.linalg.norm(np.array(cl[0]) - corner)
-                d1 = np.linalg.norm(np.array(cl[1]) - corner)
-                min_d = min(d0, d1)
-                ep = 0 if d0 <= d1 else 1
-
-                if min_d <= snap_tolerance:
-                    cl[ep] = corner.tolist()
-                    reconnected += 1
+                    if min_d <= snap_tolerance:
+                        cl[ep] = ix.tolist()
+                        reconnected += 1
 
     if reconnected > 0:
         logger.info(f"Corner reconnection: {reconnected} endpoints snapped to ideal corners")
@@ -287,10 +383,10 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
        - The intersection is inside the segment (trim) and the other
          wall is also snapping (T-junction trim, max 20% of length)
     3. If valid, extend/trim/snap the nearest endpoint to the intersection,
-       constrained to the wall's axis (X-normal keeps X, Z-normal keeps Z)
+       constrained to the wall's axis / direction line
 
     Also handles:
-    - Axis alignment enforcement: ensures walls stay straight after snapping
+    - Wall straightness enforcement: ensures walls stay straight after snapping
     - Multi-wall junctions: cluster nearby endpoints to a centroid
 
     Args:
@@ -307,7 +403,7 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
 
     for i in range(n):
         for j in range(i + 1, n):
-            if walls[i]["normal_axis"] == walls[j]["normal_axis"]:
+            if _walls_are_parallel(walls[i], walls[j]):
                 continue
 
             cl_i = walls[i]["center_line_2d"]
@@ -368,19 +464,19 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
                     f"{reason_j} {dist_j:.2f} to corner with wall {walls[i]['id']}"
                 )
 
-    # Enforce axis alignment (fix any remaining lean from clustering or rounding)
-    axis_corrected = _enforce_axis_alignment(walls)
+    # Enforce wall straightness (fix any remaining drift from snapping)
+    axis_corrected = _enforce_wall_straightness(walls)
     if axis_corrected > 0:
-        logger.info(f"Axis alignment: corrected {axis_corrected} walls")
+        logger.info(f"Wall straightness: corrected {axis_corrected} walls")
 
-    # Reconnect corners: snap endpoints to ideal (wall_x, wall_z) corners
-    corner_reconnected = _reconnect_corners(walls, snap_tolerance * 2.0)
+    # Reconnect corners
+    _reconnect_corners(walls, snap_tolerance * 2.0)
 
     # Multi-wall junction clustering (use 1.5x tolerance for clustering)
     junction_clustered = _cluster_nearby_endpoints(walls, snap_tolerance * 1.5)
 
-    # Re-enforce axis alignment after clustering
-    _enforce_axis_alignment(walls)
+    # Re-enforce wall straightness after clustering
+    _enforce_wall_straightness(walls)
 
     # Final corner reconnection
     _reconnect_corners(walls, snap_tolerance * 2.0)

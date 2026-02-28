@@ -13,7 +13,8 @@ def data_root(tmp_path: Path) -> Path:
     for subdir in ["raw", "interim/s00_import_ply", "interim/s01_frames",
                     "interim/s02_colmap", "interim/s03_gaussians",
                     "interim/s04_depth_maps", "interim/s05_tsdf",
-                    "interim/s06_planes", "processed"]:
+                    "interim/s06_planes", "interim/s06c_building_extraction",
+                    "processed"]:
         (tmp_path / subdir).mkdir(parents=True, exist_ok=True)
     return tmp_path
 

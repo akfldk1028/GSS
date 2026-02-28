@@ -488,3 +488,160 @@ class TestIfcExportStep:
         lengths = sorted([p.XDim for p in profiles])
         assert abs(lengths[0] - 2.0) < 0.01  # short walls
         assert abs(lengths[-1] - 4.0) < 0.01  # long walls
+
+
+# ── Phase 3: Multi-storey tests ──
+
+
+@needs_ifc
+class TestMultiStoreyBuilder:
+    def test_single_storey_backward_compat(self):
+        """No storeys param → single storey (original behavior)."""
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
+
+        ctx = create_ifc_file(project_name="Test_SingleStorey")
+        storeys = ctx.ifc.by_type("IfcBuildingStorey")
+        assert len(storeys) == 1
+        assert ctx.storey is not None
+        assert len(ctx.storeys) == 1
+
+    def test_multi_storey_creation(self):
+        """Multiple storey defs → multiple IfcBuildingStorey."""
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
+
+        storey_defs = [
+            {"name": "Ground Floor", "floor_height": 0.0, "ceiling_height": 3.0, "elevation": 0.0},
+            {"name": "Floor 1", "floor_height": 3.0, "ceiling_height": 6.0, "elevation": 3.0},
+        ]
+        ctx = create_ifc_file(project_name="Test_MultiStorey", storeys=storey_defs)
+        storeys = ctx.ifc.by_type("IfcBuildingStorey")
+        assert len(storeys) == 2
+        assert len(ctx.storeys) == 2
+        assert "Ground Floor" in ctx.storeys
+        assert "Floor 1" in ctx.storeys
+        # Default storey should be the first (ground floor)
+        assert ctx.storey == ctx.storeys["Ground Floor"]
+
+    def test_storey_elevation(self):
+        """Storey elevation should be set correctly."""
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
+
+        storey_defs = [
+            {"name": "Ground Floor", "floor_height": 0.0, "ceiling_height": 3.0, "elevation": 0.0},
+            {"name": "Floor 1", "floor_height": 3.0, "ceiling_height": 6.0, "elevation": 3.0},
+        ]
+        ctx = create_ifc_file(storeys=storey_defs)
+        s0 = ctx.storeys["Ground Floor"]
+        s1 = ctx.storeys["Floor 1"]
+        assert abs(s0.Elevation - 0.0) < 0.01
+        assert abs(s1.Elevation - 3.0) < 0.01
+
+    def test_get_storey_for_height(self):
+        """Height-based storey lookup."""
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file, get_storey_for_height
+
+        storey_defs = [
+            {"name": "Ground Floor", "floor_height": 0.0, "ceiling_height": 3.0, "elevation": 0.0},
+            {"name": "Floor 1", "floor_height": 3.0, "ceiling_height": 6.0, "elevation": 3.0},
+        ]
+        ctx = create_ifc_file(storeys=storey_defs)
+
+        # Height 1.5 → Ground Floor
+        s = get_storey_for_height(ctx, 1.5, storey_defs, scale=1.0)
+        assert s == ctx.storeys["Ground Floor"]
+
+        # Height 4.5 → Floor 1
+        s = get_storey_for_height(ctx, 4.5, storey_defs, scale=1.0)
+        assert s == ctx.storeys["Floor 1"]
+
+    def test_get_storey_fallback(self):
+        """Fallback to default storey when no storeys defined."""
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file, get_storey_for_height
+
+        ctx = create_ifc_file()
+        s = get_storey_for_height(ctx, 1.5, [], scale=1.0)
+        assert s == ctx.storey
+
+
+# ── Phase 4: Roof builder tests ──
+
+
+@needs_ifc
+class TestRoofBuilder:
+    def _make_ctx(self):
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
+        return create_ifc_file()
+
+    def test_flat_roof(self):
+        from gss.steps.s07_ifc_export._roof_builder import create_roof
+
+        ctx = self._make_ctx()
+        roof_planes = [{
+            "id": 0, "label": "roof", "roof_type": "flat",
+            "normal": [0.0, 1.0, 0.0], "d": -3.5,
+            "boundary_3d": [[0, 3.5, 0], [5, 3.5, 0], [5, 3.5, 4], [0, 3.5, 4]],
+        }]
+        ifc_roof, count = create_roof(ctx, roof_planes, scale=1.0)
+        assert ifc_roof is not None
+        assert ifc_roof.is_a("IfcRoof")
+        assert count == 1
+        # Should have IfcSlab with ROOF type
+        slabs = ctx.ifc.by_type("IfcSlab")
+        roof_slabs = [s for s in slabs if s.PredefinedType == "ROOF"]
+        assert len(roof_slabs) == 1
+
+    def test_no_roof_planes(self):
+        from gss.steps.s07_ifc_export._roof_builder import create_roof
+
+        ctx = self._make_ctx()
+        ifc_roof, count = create_roof(ctx, [], scale=1.0)
+        assert ifc_roof is None
+        assert count == 0
+
+    def test_multiple_roof_slabs(self):
+        from gss.steps.s07_ifc_export._roof_builder import create_roof
+
+        ctx = self._make_ctx()
+        roof_planes = [
+            {"id": 0, "label": "roof", "roof_type": "flat",
+             "normal": [0.0, 1.0, 0.0], "d": -3.5,
+             "boundary_3d": [[0, 3.5, 0], [5, 3.5, 0], [5, 3.5, 4], [0, 3.5, 4]]},
+            {"id": 1, "label": "roof", "roof_type": "flat",
+             "normal": [0.0, 1.0, 0.0], "d": -4.0,
+             "boundary_3d": [[0, 4.0, 0], [3, 4.0, 0], [3, 4.0, 2], [0, 4.0, 2]]},
+        ]
+        _, count = create_roof(ctx, roof_planes, scale=1.0)
+        assert count == 2
+
+
+# ── Phase 5: Site footprint tests ──
+
+
+@needs_ifc
+class TestSiteFootprint:
+    def test_set_site_footprint(self):
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file, set_site_footprint
+
+        ctx = create_ifc_file()
+        footprint = [[0.0, 0.0], [5.0, 0.0], [5.0, 4.0], [0.0, 4.0]]
+        set_site_footprint(ctx, footprint, scale=1.0)
+
+        assert ctx.site.Representation is not None
+        assert ctx.site.ObjectPlacement is not None
+
+    def test_site_footprint_empty(self):
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file, set_site_footprint
+
+        ctx = create_ifc_file()
+        set_site_footprint(ctx, [], scale=1.0)
+        # Site should have no representation
+        assert ctx.site.Representation is None
+
+    def test_site_footprint_scaled(self):
+        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file, set_site_footprint
+
+        ctx = create_ifc_file()
+        # Points at scale=2.0 → IFC coords /2
+        footprint = [[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]]
+        set_site_footprint(ctx, footprint, scale=2.0)
+        assert ctx.site.Representation is not None

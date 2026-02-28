@@ -43,9 +43,16 @@ dependencies = [
 
     # Phase 3: IFC
     "ifcopenshell>=0.7",
+
+    # Phase 4: Mesh export
+    "trimesh>=4.0",
 ]
 
 [project.optional-dependencies]
+mesh = [
+    "trimesh>=4.0",
+    "usd-core>=24.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

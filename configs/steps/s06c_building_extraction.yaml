@@ -1,0 +1,43 @@
+# Step 06c: Building Extraction — default config
+# Exterior building reconstruction from RANSAC planes
+
+# Scale
+scale_mode: "auto"
+coordinate_scale: 1.0
+expected_building_size: 12.0       # meters
+
+# Sub-module toggles
+enable_ground_separation: true
+enable_building_segmentation: false  # requires surface_points.ply + scipy/sklearn
+enable_facade_detection: true
+enable_footprint_extraction: true
+enable_roof_structuring: true
+enable_storey_detection: false       # requires good facade data
+
+# A. Ground separation
+ground_normal_threshold: 0.8         # min |ny| for horizontal
+min_ground_extent: 10.0              # meters (XZ bounding box area)
+ground_tolerance: 0.3                # meters (point separation tolerance)
+
+# B. Building segmentation (disabled by default)
+max_building_height: 30.0            # meters above ground
+dbscan_eps: 0.5                      # meters
+min_cluster_size: 100
+
+# C. Facade detection
+coplanar_dist_threshold: 0.5         # meters
+coplanar_angle_threshold: 15.0       # degrees
+min_facade_area: 2.0                 # sq meters
+
+# D. Footprint extraction
+# footprint_alpha: null              # auto (uncomment to set manually)
+footprint_simplify_tolerance: 0.1    # meters (Douglas-Peucker)
+
+# E. Roof structuring
+ridge_snap_tolerance: 0.3            # meters
+min_roof_tilt: 0.15                  # min |ny| for roof
+max_roof_tilt: 0.85                  # max |ny| for inclined (above = flat)
+
+# F. Storey detection (disabled by default)
+min_storey_height: 2.5               # meters
+max_storey_height: 5.0               # meters
