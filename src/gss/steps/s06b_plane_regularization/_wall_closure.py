@@ -110,6 +110,29 @@ def _convex_hull_edges(pts_2d: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]
         return _aabb_edges(pts_2d)
 
 
+def _concave_hull_edges(pts_2d: np.ndarray, alpha: float | None = None) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Compute concave hull and return edges for L-shaped / irregular outlines.
+
+    Falls back to convex hull if concave hull fails.
+    Returns list of (p1, p2) edge endpoint pairs in XZ.
+    """
+    try:
+        from gss.utils.geometry import compute_concave_hull
+        polygon = compute_concave_hull(pts_2d, alpha=alpha)
+        if polygon is not None and hasattr(polygon, "exterior"):
+            coords = np.array(polygon.exterior.coords)
+            edges = []
+            n = len(coords) - 1  # last == first (closed ring)
+            for i in range(n):
+                edges.append((coords[i].copy(), coords[i + 1].copy()))
+            if edges:
+                return edges
+    except (ImportError, Exception):
+        logger.warning("Concave hull failed, falling back to convex hull")
+
+    return _convex_hull_edges(pts_2d)
+
+
 def _edge_axis(p1: np.ndarray, p2: np.ndarray) -> str | None:
     """Determine if an edge is X-aligned or Z-aligned (Manhattan)."""
     dx = abs(p2[0] - p1[0])
@@ -258,6 +281,7 @@ def synthesize_missing_walls(
     use_floor_ceiling_hints: bool = True,
     default_thickness: float = 0.2,
     normal_mode: str = "manhattan",
+    wall_closure_mode: str = "auto",
 ) -> tuple[list[dict], list[dict]]:
     """Synthesize missing walls based on floor boundary outline.
 
@@ -271,6 +295,9 @@ def synthesize_missing_walls(
         use_floor_ceiling_hints: whether to use floor boundary for outline.
         default_thickness: thickness for synthesized walls.
         normal_mode: "manhattan" uses AABB, "cluster" uses ConvexHull.
+        wall_closure_mode: "auto" dispatches based on normal_mode,
+            "manhattan" forces AABB, "convex" forces ConvexHull,
+            "concave" uses concave hull for L-shaped buildings.
 
     Returns:
         (updated_walls, new_planes): walls list (possibly with new entries),
@@ -288,11 +315,18 @@ def synthesize_missing_walls(
             return walls, []
         logger.info("Wall closure: no floor boundary — using wall center-line AABB as fallback")
 
-    # Choose outline method based on normal_mode
-    if normal_mode == "cluster":
+    # Choose outline method based on wall_closure_mode (explicit) or normal_mode (auto)
+    if wall_closure_mode == "concave":
+        edges = _concave_hull_edges(floor_pts)
+    elif wall_closure_mode == "convex":
         edges = _convex_hull_edges(floor_pts)
-    else:
+    elif wall_closure_mode == "manhattan":
         edges = _aabb_edges(floor_pts)
+    else:  # "auto" — dispatch based on normal_mode
+        if normal_mode == "cluster":
+            edges = _convex_hull_edges(floor_pts)
+        else:
+            edges = _aabb_edges(floor_pts)
 
     floor_h = min(floor_heights) if floor_heights else 0.0
     ceiling_h = max(ceiling_heights) if ceiling_heights else floor_h + 3.0 * scale

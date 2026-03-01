@@ -14,6 +14,12 @@ steps:
     depends_on: [import_ply]
     enabled: true
 
+  - name: mesh_segmentation
+    module: gss.steps.s06d_mesh_segmentation
+    config_file: configs/steps/s06d_mesh_segmentation.yaml
+    depends_on: [plane_extraction]
+    enabled: false
+
   - name: plane_regularization
     module: gss.steps.s06b_plane_regularization
     config_file: configs/steps/s06b_plane_regularization.yaml

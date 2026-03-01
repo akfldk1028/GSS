@@ -4,10 +4,12 @@
 # Scale
 scale_mode: "auto"                 # auto | manual | metric
 coordinate_scale: 1.0              # only used when scale_mode=manual
-expected_room_size: 5.0            # meters (used for auto scale estimation)
+expected_room_size: 5.0            # meters (fallback: XZ extent based)
+expected_storey_height: 2.7        # meters (primary: height-based scale)
 
 # Wall closure
 enable_wall_closure: true
+wall_closure_mode: "auto"              # auto | manhattan | convex | concave
 max_closure_gap_ratio: 0.3
 use_floor_ceiling_hints: true
 

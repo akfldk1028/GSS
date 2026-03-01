@@ -27,7 +27,12 @@ class PlaneRegularizationConfig(BaseModel):
     expected_room_size: float = Field(
         5.0,
         gt=0,
-        description="Expected typical room dimension in meters (used for auto scale estimation).",
+        description="Expected typical room dimension in meters (fallback for auto scale).",
+    )
+    expected_storey_height: float = Field(
+        2.7,
+        gt=0,
+        description="Expected floor-to-ceiling height in meters (primary for auto scale).",
     )
 
     # A. Normal snapping
@@ -48,6 +53,11 @@ class PlaneRegularizationConfig(BaseModel):
     min_parallel_overlap: float = Field(0.3, description="Min overlap fraction between parallel walls to pair")
 
     # C2. Wall closure
+    wall_closure_mode: Literal["auto", "manhattan", "convex", "concave"] = Field(
+        "auto",
+        description="Outline method for wall closure: 'auto' dispatches based on normal_mode "
+        "(manhattan→AABB, cluster→ConvexHull), 'concave' uses concave hull for L-shaped buildings",
+    )
     max_closure_gap_ratio: float = Field(0.3, description="Max gap ratio to fill when synthesizing walls")
     use_floor_ceiling_hints: bool = Field(True, description="Use floor/ceiling boundary for wall closure")
 
@@ -66,6 +76,31 @@ class PlaneRegularizationConfig(BaseModel):
     enable_roof_detection: bool = Field(
         False, description="Detect roof planes above ceiling (exterior scans)"
     )
+
+    # H2. Polyline merging
+    enable_polyline_merging: bool = Field(
+        False, description="Merge collinear walls into multi-segment polyline walls"
+    )
+    polyline_merge_angle_tolerance: float = Field(
+        10.0, description="Max angle (degrees) between wall directions to merge"
+    )
+
+    # I. Column detection
+    enable_column_detection: bool = Field(
+        False, description="Reclassify narrow walls as columns"
+    )
+    max_column_width: float = Field(
+        1.0, description="Max extent in both axes to classify as column (meters)"
+    )
+    column_aspect_ratio: float = Field(
+        0.3, description="Max min(length,thickness)/height for column classification"
+    )
+
+    # J. Opening shape refinement
+    enable_opening_shape_refinement: bool = Field(
+        False, description="Refine opening shapes (arched/circular detection)"
+    )
+    opening_arch_segments: int = Field(12, description="Number of segments to approximate an arch")
 
     # F. Opening detection
     opening_histogram_resolution: float = Field(0.05, description="Histogram bin size (meters)")

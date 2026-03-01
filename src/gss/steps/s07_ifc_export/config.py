@@ -27,6 +27,10 @@ class IfcExportConfig(BaseModel):
     create_spaces: bool = Field(True, description="Create IfcSpace from spaces.json")
     create_slabs: bool = Field(True, description="Create floor/ceiling IfcSlab")
     create_roof: bool = Field(True, description="Create IfcRoof from roof planes")
+    create_roof_annotations: bool = Field(True, description="Create IfcAnnotation for ridge/eave/valley lines")
+    create_columns: bool = Field(True, description="Create IfcColumn from columns.json")
+    create_tessellated: bool = Field(True, description="Create tessellated elements from mesh_elements.json")
+    tessellation_max_faces: int = Field(50000, description="Max faces per tessellated element")
     include_synthetic_walls: bool = Field(True, description="Include synthetic walls in IFC export")
 
     # Scale override (None = use coordinate_scale from spaces.json)

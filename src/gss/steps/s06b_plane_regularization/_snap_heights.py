@@ -57,12 +57,13 @@ def _plane_height(plane: dict) -> float:
     return -plane["d"] / ny
 
 
-def snap_heights(planes: list[dict], tolerance: float = 0.5) -> dict:
+def snap_heights(planes: list[dict], tolerance: float = 0.5, scale: float = 1.0) -> dict:
     """Cluster floor/ceiling planes by height and snap to cluster means.
 
     Args:
         planes: list of plane dicts (modified in-place), in Manhattan space.
         tolerance: max height difference within a cluster.
+        scale: scene_units / meter (for fallback ceiling height).
 
     Returns:
         stats dict with floor_height, ceiling_height, etc.
@@ -107,6 +108,7 @@ def snap_heights(planes: list[dict], tolerance: float = 0.5) -> dict:
     stats["storeys"] = _group_storeys(
         stats.get("floor_heights", []),
         stats.get("ceiling_heights", []),
+        scale=scale,
     )
 
     return stats
@@ -115,6 +117,7 @@ def snap_heights(planes: list[dict], tolerance: float = 0.5) -> dict:
 def _group_storeys(
     floor_heights: list[float],
     ceiling_heights: list[float],
+    scale: float = 1.0,
 ) -> list[dict]:
     """Pair floor and ceiling heights into storey definitions.
 
@@ -122,6 +125,11 @@ def _group_storeys(
     1. Sort all floor and ceiling heights
     2. Greedily match each floor to the nearest ceiling above it
     3. Name storeys sequentially (Ground Floor, 1st Floor, ...)
+
+    Args:
+        floor_heights: detected floor heights (Manhattan Y, raw scene units).
+        ceiling_heights: detected ceiling heights (Manhattan Y, raw scene units).
+        scale: scene_units / meter (for fallback ceiling = floor + 3m * scale).
 
     Returns:
         List of storey dicts: [{name, floor_height, ceiling_height, elevation}, ...]
@@ -133,7 +141,7 @@ def _group_storeys(
     # Handle single-storey (most common case)
     if len(floor_heights) <= 1 and len(ceiling_heights) <= 1:
         floor_h = floor_heights[0] if floor_heights else 0.0
-        ceiling_h = ceiling_heights[0] if ceiling_heights else floor_h + 3.0
+        ceiling_h = ceiling_heights[0] if ceiling_heights else floor_h + 3.0 * scale
         return [{
             "name": "Ground Floor",
             "floor_height": float(floor_h),
@@ -174,7 +182,7 @@ def _group_storeys(
     if not storeys:
         # Fallback: treat all as single storey
         floor_h = min(floors_sorted) if floors_sorted else 0.0
-        ceiling_h = max(ceilings_sorted) if ceilings_sorted else floor_h + 3.0
+        ceiling_h = max(ceilings_sorted) if ceilings_sorted else floor_h + 3.0 * scale
         storeys = [{
             "floor_height": float(floor_h),
             "ceiling_height": float(ceiling_h),

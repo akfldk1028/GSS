@@ -275,17 +275,100 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
 
         # --- Roof (from planes.json with label="roof") ---
         num_roof_slabs = 0
+        roof_type_str = "none"
         if self.config.create_roof and inputs.planes_file and inputs.planes_file.exists():
             with open(inputs.planes_file, encoding="utf-8") as f:
                 all_planes = json.load(f)
             roof_planes = [p for p in all_planes if p.get("label") == "roof"]
+
+            # Check for structured roof data from s06c building_context.json
+            roof_structure = None
+            if inputs.building_context_file and inputs.building_context_file.exists():
+                with open(inputs.building_context_file, encoding="utf-8") as f:
+                    building_context = json.load(f)
+                roof_structure = building_context.get("roof_structure")
+
             if roof_planes:
-                from ._roof_builder import create_roof
-                _, num_roof_slabs = create_roof(
-                    ctx, roof_planes, scale,
-                    material_name=self.config.slab_material_name,
-                    slab_thickness=self.config.default_slab_thickness,
-                )
+                if roof_structure:
+                    from ._roof_builder import create_structured_roof
+                    _, num_roof_slabs, roof_type_str = create_structured_roof(
+                        ctx, roof_planes, roof_structure, scale,
+                        material_name=self.config.slab_material_name,
+                        slab_thickness=self.config.default_slab_thickness,
+                        create_annotations=self.config.create_roof_annotations,
+                    )
+                else:
+                    from ._roof_builder import create_roof
+                    _, num_roof_slabs = create_roof(
+                        ctx, roof_planes, scale,
+                        material_name=self.config.slab_material_name,
+                        slab_thickness=self.config.default_slab_thickness,
+                    )
+
+        # --- Columns (from columns.json) ---
+        num_columns = 0
+        if (
+            self.config.create_columns
+            and inputs.columns_file
+            and inputs.columns_file.exists()
+        ):
+            with open(inputs.columns_file, encoding="utf-8") as f:
+                columns_data: list[dict] = json.load(f)
+            if columns_data:
+                from ._column_builder import create_column
+                col_products_with_height: list[tuple] = []
+                for col_data in columns_data:
+                    col = create_column(ctx, col_data, scale, floor_z=floor_z)
+                    if col is not None:
+                        hr = col_data.get("height_range", [0, 0])
+                        col_mid_h = (hr[0] + hr[1]) / 2.0
+                        col_products_with_height.append((col, col_mid_h))
+                        num_columns += 1
+
+                if multi_storey and storey_defs:
+                    assign_products_to_storeys(
+                        ctx, col_products_with_height, storey_defs, scale,
+                    )
+                else:
+                    assign_to_storey(ctx, [p for p, _ in col_products_with_height])
+                logger.info(f"Created {num_columns} IfcColumn objects")
+
+        # --- Tessellated elements (from mesh_elements.json) ---
+        num_tessellated = 0
+        if (
+            self.config.create_tessellated
+            and inputs.mesh_elements_file
+            and inputs.mesh_elements_file.exists()
+        ):
+            with open(inputs.mesh_elements_file, encoding="utf-8") as f:
+                mesh_elements: list[dict] = json.load(f)
+            if mesh_elements:
+                from ._tessellation_builder import create_tessellated_element
+                tess_products: list = []
+                for elem in mesh_elements:
+                    faces = elem.get("faces", [])
+                    if len(faces) > self.config.tessellation_max_faces:
+                        logger.warning(
+                            f"Tessellated element '{elem.get('name')}': "
+                            f"{len(faces)} faces exceeds max {self.config.tessellation_max_faces}, skipping"
+                        )
+                        continue
+                    product = create_tessellated_element(
+                        ctx,
+                        vertices=elem.get("vertices", []),
+                        faces=faces,
+                        ifc_class=elem.get("ifc_class", "IfcBuildingElementProxy"),
+                        name=elem.get("name", f"Tessellated_{num_tessellated}"),
+                        scale=scale,
+                        color=elem.get("color"),
+                    )
+                    if product is not None:
+                        tess_products.append(product)
+                        num_tessellated += 1
+
+                if tess_products:
+                    assign_to_storey(ctx, tess_products)
+                    logger.info(f"Created {num_tessellated} tessellated elements")
 
         # --- Site footprint ---
         if building_footprint:
@@ -298,9 +381,11 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
 
         logger.info(
             f"IFC exported: {num_walls} walls, {num_slabs} slabs, "
-            f"{num_spaces} spaces, {num_openings} openings"
+            f"{num_spaces} spaces, {num_openings} openings, "
+            f"{num_roof_slabs} roof slabs, {num_columns} columns, "
+            f"{num_tessellated} tessellated"
             f"{f', {len(storey_defs)} storeys' if multi_storey else ''}"
-            f" → {ifc_path}"
+            f" -> {ifc_path}"
         )
 
         return IfcExportOutput(
@@ -309,6 +394,10 @@ class IfcExportStep(BaseStep[IfcExportInput, IfcExportOutput, IfcExportConfig]):
             num_slabs=num_slabs,
             num_spaces=num_spaces,
             num_openings=num_openings,
+            num_roof_slabs=num_roof_slabs,
+            roof_type=roof_type_str,
+            num_columns=num_columns,
+            num_tessellated=num_tessellated,
             coordinate_scale=scale,
             ifc_version=self.config.ifc_version,
         )

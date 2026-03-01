@@ -21,7 +21,10 @@ class BuildingExtractionConfig(BaseModel):
     )
     coordinate_scale: float = Field(1.0, description="Manual scale (scene_units / meter)")
     expected_building_size: float = Field(
-        12.0, gt=0, description="Expected building dimension in meters (for auto scale)"
+        12.0, gt=0, description="Expected building dimension in meters (fallback for auto scale)"
+    )
+    expected_storey_height: float = Field(
+        3.0, gt=0, description="Expected storey height in meters (primary for auto scale)"
     )
 
     # A. Ground separation

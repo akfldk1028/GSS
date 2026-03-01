@@ -1,127 +1,173 @@
-# GSS — 3DGS to BIM Pipeline
+# GSS — 3D Gaussian Splatting to BIM Pipeline
 
-Video → 3D Gaussian Splatting → Surface Reconstruction → BIM (IFC) 자동 변환 파이프라인.
+카메라 영상만으로 3D Gaussian Splatting → Surface → BIM(IFC) → Digital Twin(GLB/USD) 자동 변환.
 
-## Two Pipelines
+## Pipelines
 
-### 기존 (8-step)
+### 기존 (9-step)
 ```
-s01 → s02 → s03(gsplat) → s04(depth) → s05(TSDF) → s06 → s06b → s07
+Video → s01(Frames) → s02(COLMAP) → s03(gsplat 2DGS) → s04(Depth) → s05(TSDF) → s06(Planes) → s06b(Regularization) → s07(IFC) → s08(Mesh Export)
 ```
-Config: `configs/pipeline.yaml`
 
-### PlanarGS (6-step, 권장)
+### PlanarGS (7-step, 권장)
 ```
-s01 → s02 → s03_planargs(PlanarGS) → s06 → s06b → s07
+Video → s01(Frames) → s02(COLMAP) → s03_planargs(PlanarGS) → s06(Planes) → s06b(Regularization) → s07(IFC) → s08(Mesh Export)
 ```
-Config: `configs/pipeline_planargs.yaml`
 
-## Pipeline Steps
+### Exterior (10-step, 외부 건물)
+```
+Video → ... → s06(Planes) → s06c(Building Extraction) → s06b(Regularization) → s07(IFC) → s08(Mesh Export)
+```
 
-| # | Step | Description | Pipeline |
-|---|------|-------------|----------|
-| s01 | extract_frames | 비디오에서 프레임 추출 (OpenCV) | both |
-| s02 | colmap | SfM 카메라 포즈 추정 (pycolmap) | both |
-| s03 | gaussian_splatting | 2DGS 학습 (gsplat) | 기존 |
-| s03_planargs | planargs | PlanarGS subprocess (NeurIPS 2025) | PlanarGS |
-| s04 | depth_render | Depth/Normal 맵 렌더링 (gsplat) | 기존 |
-| s05 | tsdf_fusion | TSDF 볼륨 통합 (Open3D) | 기존 |
-| s06 | plane_extraction | 평면 추출 + Manhattan 정렬 + 병합 + 경계 | both |
-| s06b | plane_regularization | 평면 정규화 (normal snap, height snap, wall thickness, corner trim, space detection) | both |
-| s07 | ifc_export | IFC4 BIM 파일 생성 (IfcOpenShell) | both |
+### Import (5-step, 기존 3DGS PLY 직접 투입)
+```
+s00(Import PLY) → s06(Planes) → s06b(Regularization) → s07(IFC) → s08(Mesh Export)
+```
 
 ## Quick Start
 
 ```bash
 pip install -e .
-gss info                                        # Show pipeline steps
-gss run                                         # Run 기존 pipeline
-gss run --config configs/pipeline_planargs.yaml  # Run PlanarGS pipeline
-gss run-step plane_extraction                    # Run single step
+gss info                                          # Show pipeline steps
+gss run                                           # Run 기존 pipeline
+gss run --config configs/pipeline_planargs.yaml   # Run PlanarGS pipeline
+gss run --config configs/pipeline_import.yaml     # Run Import pipeline
+gss run-step plane_extraction                     # Run single step
 ```
 
-## E2E Test Results (Replica room0)
+## Pipeline Steps
 
-| Metric | PlanarGS |
-|--------|----------|
-| Surface points | 21.4M |
-| PSNR | 40.13 |
-| Walls detected | 3 |
-| Floors detected | 1 |
-| Ceilings detected | 2 |
-| Other (furniture) | 16 |
-| s06 time | ~100s |
-| Total time | ~45min |
+| # | Step | Description | Pipeline |
+|---|------|-------------|----------|
+| s00 | import_ply | 기존 3DGS PLY 직접 투입 | Import |
+| s01 | extract_frames | 비디오에서 프레임 추출 (OpenCV) | 기존/PlanarGS/Exterior |
+| s02 | colmap | SfM 카메라 포즈 추정 (pycolmap) | 기존/PlanarGS/Exterior |
+| s03 | gaussian_splatting | 2DGS 학습 (gsplat) | 기존 |
+| s03_planargs | planargs | PlanarGS subprocess (NeurIPS 2025) | PlanarGS |
+| s04 | depth_render | Depth/Normal 맵 렌더링 (gsplat) | 기존 |
+| s05 | tsdf_fusion | TSDF 볼륨 통합 (Open3D) | 기존 |
+| s06 | plane_extraction | RANSAC 평면 추출 + Manhattan 정렬 + 경계 | all |
+| s06c | building_extraction | 외부 건물 재구성 (ground/facade/footprint/roof) | Exterior |
+| s06b | plane_regularization | 기하 정규화 (normal snap, height snap, wall thickness, space detection) | all |
+| s07 | ifc_export | IFC4 BIM 파일 생성 (IfcOpenShell) | all |
+| s08 | mesh_export | IFC → GLB/USD 디지털트윈 내보내기 (trimesh, usd-core) | all |
 
-### Plane Extraction Visualization
+## IFC Hierarchy (s07)
 
-| View | Image |
-|------|-------|
-| Isometric (Side Low) | ![Side Low](docs/images/planes_view5.png) |
-| Front-Right | ![Front-Right](docs/images/planes_view3.png) |
-| Back Center | ![Back Center](docs/images/planes_view4.png) |
-| Top-Down | ![Top-Down](docs/images/planes_topdown.png) |
-| Front Elevation | ![Front](docs/images/planes_front.png) |
+```
+IfcProject → IfcSite → IfcBuilding → IfcBuildingStorey
+  ├─ IfcWall (center_line_2d → IfcArbitraryClosedProfileDef polyline)
+  │   └─ IfcRelVoidsElement → IfcOpeningElement
+  │        └─ IfcRelFillsElement → IfcDoor / IfcWindow
+  ├─ IfcColumn (round: IfcCircleProfileDef / rectangular: IfcRectangleProfileDef)
+  ├─ IfcSlab (floor + ceiling, extruded boundary_2d)
+  ├─ IfcRoof (flat/gable/hip, with ridge/eave annotations)
+  └─ IfcSpace (room polygons from boundary_2d)
+```
 
-Wall(빨강) 3개가 ㄷ자로 방을 감싸고, Floor(초록) 바닥, Ceiling(파랑) 천장이 분리 검출됨.
-전면 벽은 카메라 시점 위치로 미검출 (정상).
+## Mesh Export (s08)
+
+IFC → GLB (trimesh) + USDC (usd-core) + optional USDZ
+
+| Format | Engine | Transform |
+|--------|--------|-----------|
+| GLB | trimesh | Z-up → Y-up: `(x,y,z)→(x,z,-y)` |
+| USDC | usd-core | UsdGeom.Mesh + UsdPreviewSurface PBR |
+| USDZ | usd-core | Packaged USD (Apple Vision Pro / ARKit) |
+
+## s06b Plane Regularization
+
+| Phase | Module | Description |
+|-------|--------|-------------|
+| A | `_snap_normals` | Wall normals → Manhattan axes (or cluster mode for oblique) |
+| B | `_snap_heights` | Floor/ceiling height clustering + storey detection |
+| C | `_wall_thickness` | Parallel pair detection + center-lines |
+| C2 | `_wall_closure` | Synthesize missing walls (AABB/convex/concave hull) |
+| D | `_intersection_trimming` | Snap wall endpoints to corners |
+| E | `_space_detection` | Polygonize center-lines → room boundaries |
+| F | `_opening_detection` | Door/window detection via Cloud2BIM histogram (disabled by default) |
+| G | `_exterior_classification` | Convex hull → interior/exterior wall classification |
+
+## s06c Building Extraction (Exterior)
+
+| Phase | Module | Description |
+|-------|--------|-------------|
+| A | `_ground_separation` | 가장 넓은 수평면 → ground label |
+| B | `_building_segmentation` | DBSCAN density clustering (optional) |
+| C | `_facade_detection` | Normal-grouped vertical plane clusters → facades |
+| D | `_footprint_extraction` | Alpha shape / concave hull → 2D building outline |
+| E | `_roof_structuring` | Plane intersection → ridge/eave/valley lines |
+| F | `_storey_detection` | Height histogram → floor levels (optional) |
 
 ## Tech Stack
 
 | Phase | Tool | Package |
 |-------|------|---------|
-| SfM | COLMAP | pycolmap |
+| SfM | COLMAP + hloc | pycolmap |
 | 3DGS (기존) | gsplat 2DGS | gsplat |
 | 3DGS (PlanarGS) | PlanarGS subprocess | diff-plane-rasterization |
 | TSDF | Open3D ScalableTSDFVolume | open3d |
-| Planes | RANSAC + Manhattan + coplanar merge | open3d, shapely |
+| Planes | RANSAC + alphashape | open3d, alphashape, shapely |
+| Regularization | normal/height snap, wall thickness, space detection | numpy, shapely |
+| Building Extraction | ground/facade/footprint/roof | numpy, shapely, scipy |
 | BIM | IfcOpenShell | ifcopenshell |
+| GLB Export | trimesh | trimesh |
+| USD Export | usd-core | pxr (UsdGeom, UsdShade) |
 
-## s06 Plane Extraction Features
+## Visualization
 
-- **Manhattan World Alignment**: normal histogram → auto axis detection → axis-aligned RANSAC
-- **Coplanar Merging**: Union-Find + centroid separation → SVD refit
-- **Position-based Classification**: horizontal planes → floor/ceiling/furniture by height
-- **Architectural Filtering**: small walls/ceilings (< 10% of max) → reclassified as furniture
-- **Clean Boundaries**: minimum_rotated_rectangle for wall/floor/ceiling (5-vertex rectangles)
+```bash
+python scripts/visualize_planes_3d.py [--original] [--save]  # s06b planes/walls
+python scripts/visualize_ifc.py [--save] [--open]             # IFC round-trip
+python scripts/visualize_mesh.py <file> [--save] [--compare]  # GLB/USD export
+```
 
-## s06b Plane Regularization Features
+| View | Image |
+|------|-------|
+| IFC Isometric | ![IFC Isometric](docs/images/ifc_isometric.png) |
+| IFC Front | ![IFC Front](docs/images/ifc_front.png) |
+| IFC Top-Down | ![IFC Top-Down](docs/images/ifc_topdown.png) |
 
-s06 RANSAC 결과를 BIM에 맞게 정리하는 geometric cleanup step.
+## Project Structure
 
-- **A. Normal Snapping**: wall normals → 정확한 ±X/±Z 축, floor/ceiling → ±Y (Manhattan space)
-- **B. Height Snapping**: floor/ceiling 높이를 cluster mean으로 통일
-- **C. Wall Thickness**: parallel wall pair 감지 → thickness + center-line 계산
-- **D. Intersection Trimming**: wall endpoint를 corner intersection으로 연장 (scale-aware)
-- **E. Space Detection**: wall center-lines → Shapely polygonize → room boundary polygons
-- **F. Opening Detection**: Phase 2 (disabled)
+```
+src/gss/core/           - Pipeline runner, BaseStep ABC, shared contracts
+src/gss/steps/s00~s08/  - Each step: __init__.py + step.py + config.py + contracts.py + README.md
+src/gss/steps/s03_planargs/               - PlanarGS wrapper (replaces s03+s04+s05)
+src/gss/steps/s06b_plane_regularization/  - Geometric cleanup (sub-modules A~G)
+src/gss/steps/s06c_building_extraction/   - Exterior building reconstruction (sub-modules A~F)
+src/gss/steps/s07_ifc_export/             - IFC builder modules (wall/slab/space/roof/column/opening/tessellation)
+src/gss/steps/s08_mesh_export/            - IFC → GLB/USD export (_ifc_to_mesh, _glb_writer, _usd_writer)
+src/gss/utils/          - Shared utilities (I/O, geometry, subprocess)
+configs/                - YAML configs (4 pipeline configs + per-step)
+data/                   - raw/ → interim/s00~s06c/ → processed/
+scripts/                - Visualization, sample data download, full pipeline runner
+tests/                  - 325 tests (pytest)
+clone/PlanarGS/         - PlanarGS repo (separate conda env)
+docs/                   - Research papers, images
+```
+
+## Testing
+
+```bash
+pytest tests/                    # Full suite (325 tests)
+pytest tests/test_steps/ -v     # Step tests only
+ruff check src/                  # Lint
+```
 
 ## References
-
-각 단계별 핵심 참고 논문. 전체 목록은 [`docs/research_papers.md`](docs/research_papers.md) 참조.
 
 | 단계 | 논문 | 게재 | 역할 |
 |------|------|------|------|
 | 3DGS 기초 | [3D Gaussian Splatting](https://arxiv.org/abs/2308.04079) (Kerbl et al.) | SIGGRAPH 2023 | 3DGS 원본 |
 | Surface (기존) | [2D Gaussian Splatting](https://arxiv.org/abs/2403.17888) (Huang et al.) | SIGGRAPH 2024 | 2DGS surfel 기반 surface reconstruction |
-| Surface (PlanarGS) | [PlanarGS](https://arxiv.org/abs/2510.23930) | NeurIPS 2025 | GroundedSAM + co-planarity loss, Replica Chamfer 2.5x 개선 |
+| Surface (PlanarGS) | [PlanarGS](https://arxiv.org/abs/2510.23930) | NeurIPS 2025 | GroundedSAM + co-planarity loss |
 | 라이브러리 | [gsplat](https://arxiv.org/abs/2409.06765) (Ye et al.) | JMLR MLOSS | 2DGS 모드 내장 렌더링 라이브러리 |
-| 실내 특화 | [2DGS-Room](https://arxiv.org/abs/2412.03428) (Zhang et al.) | 2024 | textureless 벽/바닥 대응, seed-guided init |
-| 평면 정규화 | [PGSR](https://arxiv.org/abs/2406.06521) (Chen et al.) | IEEE TVCG | planar prior regularization |
 | Plane→BIM | [Cloud2BIM](https://arxiv.org/abs/2503.11498) (Zbirovský, Nežerka) | Automation in Construction 2025 | RANSAC→boundary→IFC 파이프라인 검증 |
-| Coplanar Merge | [VERTICAL](https://arxiv.org/abs/2508.07355) | ISPRS 2025 | coplanar face 병합 + 비정규 경계 정리 |
-| Manhattan Alignment | Furukawa et al. — Manhattan World Stereo | ECCV 2016 | normal SVD → dominant axis → axis-aligned reconstruction |
-| Plane Simplification | [Structure-preserving Planar Simplification](https://arxiv.org/abs/2408.06814) | 2024 | centroid separation 기반 coplanarity 판정 |
+| BIM+3DGS | [Integrating CAD, BIM, and 3DGS](https://www.nature.com/articles/s41598-025-32244-y) | Nature Sci. Rep. 2026 | ISO 19650 준수, 3DGS as-built 검증 |
+| Exterior | [GS4Buildings](https://arxiv.org/abs/2508.07355) | 2025 | LoD2 prior-guided building reconstruction |
+| Digital Twin | [Material-informed GS](https://arxiv.org/abs/2511.20348) | 2025 | Camera → 3DGS → mesh → material → physics |
 
-## Project Structure
+## License
 
-```
-src/gss/core/          - Pipeline runner, BaseStep ABC
-src/gss/steps/s01~s07/ - Each step: step.py + config.py + contracts.py + README.md
-src/gss/steps/s03_planargs/ - PlanarGS wrapper (replaces s03+s04+s05)
-src/gss/steps/s06b_plane_regularization/ - Geometric cleanup (6 sub-modules)
-configs/               - YAML configs (pipeline.yaml, pipeline_planargs.yaml)
-data/                  - raw/ → interim/s01~s06/ → processed/
-clone/PlanarGS/        - PlanarGS repo (separate conda env)
-docs/                  - Research papers, images
-```
+MIT

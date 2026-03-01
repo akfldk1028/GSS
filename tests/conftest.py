@@ -14,6 +14,7 @@ def data_root(tmp_path: Path) -> Path:
                     "interim/s02_colmap", "interim/s03_gaussians",
                     "interim/s04_depth_maps", "interim/s05_tsdf",
                     "interim/s06_planes", "interim/s06c_building_extraction",
+                    "interim/s06d_mesh_segmentation",
                     "processed"]:
         (tmp_path / subdir).mkdir(parents=True, exist_ok=True)
     return tmp_path

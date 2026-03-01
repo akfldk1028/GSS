@@ -4,7 +4,8 @@
 # Scale
 scale_mode: "auto"
 coordinate_scale: 1.0
-expected_building_size: 12.0       # meters
+expected_building_size: 12.0       # meters (fallback: XZ extent based)
+expected_storey_height: 3.0        # meters (primary: height-based scale)
 
 # Sub-module toggles
 enable_ground_separation: true

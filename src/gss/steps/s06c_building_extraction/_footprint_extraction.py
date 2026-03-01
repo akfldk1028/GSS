@@ -74,65 +74,12 @@ def _collect_footprint_points(
 
 
 def _compute_concave_hull(points_2d: np.ndarray, alpha: float | None = None):
-    """Compute concave hull using shapely or alphashape.
+    """Compute concave hull using shared utility.
 
-    Falls back to convex hull if concave hull fails.
+    Delegates to gss.utils.geometry.compute_concave_hull.
     """
-    try:
-        from shapely.geometry import MultiPoint
-        mp = MultiPoint(points_2d.tolist())
-
-        # Convex hull as baseline
-        convex = mp.convex_hull
-        if convex.geom_type != "Polygon" or convex.is_empty:
-            return None
-
-        # Try Shapely 2.0+ concave_hull
-        try:
-            from shapely import concave_hull
-            if alpha is not None:
-                ratio = min(1.0, max(0.0, 1.0 / (alpha + 0.01)))
-            else:
-                ratio = 0.3  # moderate concavity
-            hull = concave_hull(mp, ratio=ratio)
-            if hull.is_valid and not hull.is_empty and hull.geom_type == "Polygon":
-                # Guard: if concave hull is too small compared to convex hull,
-                # the input points likely form a perimeter (wall boundaries)
-                # rather than a filled region. Fall back to convex hull.
-                if hull.area >= convex.area * 0.3:
-                    return hull
-        except (ImportError, Exception):
-            pass
-
-        # Try alphashape package
-        try:
-            import alphashape
-            if alpha is None:
-                alpha = alphashape.optimizealpha(points_2d)
-            hull = alphashape.alphashape(points_2d, alpha)
-            if hasattr(hull, "exterior") and not hull.is_empty:
-                if hull.area >= convex.area * 0.3:
-                    return hull
-        except (ImportError, Exception):
-            pass
-
-        # Fallback: convex hull
-        return convex
-
-    except ImportError:
-        pass
-
-    # Pure numpy convex hull fallback
-    try:
-        from scipy.spatial import ConvexHull
-        ch = ConvexHull(points_2d)
-        vertices = points_2d[ch.vertices]
-        from shapely.geometry import Polygon
-        return Polygon(vertices)
-    except (ImportError, Exception):
-        pass
-
-    return None
+    from gss.utils.geometry import compute_concave_hull
+    return compute_concave_hull(points_2d, alpha=alpha)
 
 
 def _oriented_bbox(polygon) -> dict | None:

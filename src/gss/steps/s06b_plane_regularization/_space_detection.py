@@ -99,6 +99,7 @@ def detect_spaces(
     ceiling_heights: list[float],
     min_area: float = 1.0,
     snap_tolerance: float = 0.0,
+    scale: float = 1.0,
 ) -> list[dict]:
     """Detect enclosed room polygons from wall center-lines.
 
@@ -108,27 +109,32 @@ def detect_spaces(
         ceiling_heights: detected ceiling heights (Manhattan Y).
         min_area: minimum polygon area to keep (already scaled).
         snap_tolerance: tolerance for snapping nearby endpoints (already scaled).
+        scale: scene_units / meter (for fallback ceiling height).
 
     Returns:
         list of space dicts:
         {id, boundary_2d, area, floor_height, ceiling_height}
     """
-    # Build LineStrings from wall center-lines
+    # Build LineStrings from wall center-lines (supports N-point polylines)
     lines = []
     for w in walls:
         cl = w["center_line_2d"]
-        p1, p2 = cl[0], cl[1]
-        length = np.linalg.norm(np.array(p2) - np.array(p1))
-        if length < 1e-6:
+        if len(cl) < 2:
             continue
-        lines.append(LineString([p1, p2]))
+        # Compute total length
+        total = 0.0
+        for k in range(len(cl) - 1):
+            total += np.linalg.norm(np.array(cl[k + 1]) - np.array(cl[k]))
+        if total < 1e-6:
+            continue
+        lines.append(LineString(cl))
 
     if len(lines) < 3:
         logger.warning("Space detection: fewer than 3 wall lines, skipping")
         return []
 
     floor_h = min(floor_heights) if floor_heights else 0.0
-    ceiling_h = max(ceiling_heights) if ceiling_heights else 3.0
+    ceiling_h = max(ceiling_heights) if ceiling_heights else floor_h + 3.0 * scale
 
     # Snap nearby endpoints to close small gaps
     if snap_tolerance > 0:

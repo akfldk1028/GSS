@@ -38,6 +38,12 @@ steps:
     depends_on: [tsdf_fusion]
     enabled: true
 
+  - name: mesh_segmentation
+    module: gss.steps.s06d_mesh_segmentation
+    config_file: configs/steps/s06d_mesh_segmentation.yaml
+    depends_on: [plane_extraction]
+    enabled: true
+
   - name: plane_regularization
     module: gss.steps.s06b_plane_regularization
     config_file: configs/steps/s06b_plane_regularization.yaml
@@ -47,7 +53,7 @@ steps:
   - name: ifc_export
     module: gss.steps.s07_ifc_export
     config_file: configs/steps/s07_ifc_export.yaml
-    depends_on: [plane_regularization]
+    depends_on: [plane_regularization, mesh_segmentation]
     enabled: true
 
   - name: mesh_export

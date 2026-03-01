@@ -30,6 +30,7 @@ data/interim/**
 data/processed/**
 !data/processed/
 !data/processed/.gitkeep
+data/runs/
 
 # Clone repos (external, not submodules)
 clone/

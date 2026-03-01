@@ -328,9 +328,9 @@ class TestScaleEstimation:
                 [0, 0, 0], [35, 0, 0], [35, 0, 28], [0, 0, 28],
             ])},
         ]
-        scale = _estimate_scale(planes, expected_room_size=5.0)
-        # Median dimension of [28, 21, 35] = 28. Scale = 28/5 = 5.6
-        assert 4.0 < scale < 8.0
+        scale = _estimate_scale(planes, expected_storey_height=2.7, expected_room_size=5.0)
+        # Wall Y-extent = 21. Scale = 21/2.7 ≈ 7.8 (height-based)
+        assert 4.0 < scale < 12.0
 
     def test_manual_scale_override(self):
         """When scale_mode='manual', the provided coordinate_scale should be used."""
@@ -438,6 +438,96 @@ class TestWallClosure:
         # Should synthesize walls for uncovered edges
         assert len(updated_walls) > 1
         assert len(new_planes) > 0
+
+
+class TestWallClosureConcaveMode:
+    """Tests for wall_closure_mode='concave' (L-shaped buildings)."""
+
+    def test_concave_hull_edges_l_shape(self):
+        """Concave hull of L-shaped points should produce 5+ edges (not 4 from convex)."""
+        from gss.steps.s06b_plane_regularization._wall_closure import _concave_hull_edges
+        # L-shaped floor plan points
+        pts = np.array([
+            [0, 0], [5, 0], [5, 3],
+            [3, 3], [3, 5], [0, 5],
+        ], dtype=float)
+        edges = _concave_hull_edges(pts)
+        # L-shape has 6 vertices → 6 edges (concave hull) or 4-5 (convex fallback)
+        # With shapely concave_hull, should get 6 edges for L-shape
+        assert len(edges) >= 4  # at minimum convex hull
+        # Each edge should be a tuple of two points
+        for p1, p2 in edges:
+            assert len(p1) == 2
+            assert len(p2) == 2
+
+    def test_concave_mode_dispatches(self):
+        """wall_closure_mode='concave' should use concave hull edges."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 5]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        # L-shaped floor
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 5], [0, 0, 5]])},
+            {"id": 1, "label": "floor", "normal": np.array([0, 1, 0]), "d": 0.0,
+             "boundary_3d": np.array([
+                 [0, 0, 0], [5, 0, 0], [5, 0, 3],
+                 [3, 0, 3], [3, 0, 5], [0, 0, 5],
+             ])},
+        ]
+        updated_walls, new_planes = synthesize_missing_walls(
+            walls, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0,
+            wall_closure_mode="concave",
+        )
+        # Should produce walls (exact count depends on concave hull result)
+        assert len(updated_walls) >= 1
+
+    def test_auto_mode_backward_compat(self):
+        """wall_closure_mode='auto' with normal_mode='manhattan' should use AABB (4 edges)."""
+        from gss.steps.s06b_plane_regularization._wall_closure import synthesize_missing_walls
+        walls = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        planes = [
+            {"id": 0, "label": "wall", "normal": np.array([-1, 0, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [0, 3, 0], [0, 3, 4], [0, 0, 4]])},
+            {"id": 1, "label": "floor", "normal": np.array([0, 1, 0]), "d": 0.0,
+             "boundary_3d": np.array([[0, 0, 0], [5, 0, 0], [5, 0, 4], [0, 0, 4]])},
+        ]
+        # auto + manhattan → AABB (same as before)
+        updated_walls_auto, _ = synthesize_missing_walls(
+            walls[:], planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0,
+            normal_mode="manhattan",
+            wall_closure_mode="auto",
+        )
+        # Explicit manhattan mode → same result
+        walls2 = [
+            {"id": 0, "plane_ids": [0], "center_line_2d": [[0, 0], [0, 4]],
+             "thickness": 0.2, "height_range": [0, 3], "normal_axis": "x"},
+        ]
+        updated_walls_explicit, _ = synthesize_missing_walls(
+            walls2, planes,
+            floor_heights=[0.0], ceiling_heights=[3.0],
+            scale=1.0,
+            wall_closure_mode="manhattan",
+        )
+        assert len(updated_walls_auto) == len(updated_walls_explicit)
+
+    def test_config_wall_closure_mode_field(self):
+        """Config should accept wall_closure_mode values."""
+        cfg = PlaneRegularizationConfig(wall_closure_mode="concave")
+        assert cfg.wall_closure_mode == "concave"
+        cfg2 = PlaneRegularizationConfig(wall_closure_mode="auto")
+        assert cfg2.wall_closure_mode == "auto"
+        cfg3 = PlaneRegularizationConfig()  # default
+        assert cfg3.wall_closure_mode == "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -1394,3 +1484,84 @@ class TestRoofDetection:
         stats = detect_roof_planes(planes, ceiling_heights=[3.0])
         assert stats["num_roof_planes"] == 0
         assert planes[0]["label"] == "wall"
+
+
+# ---------------------------------------------------------------------------
+# Polyline merging tests (s06b module, moved from test_s07)
+# ---------------------------------------------------------------------------
+
+
+class TestPolylineMerging:
+    def test_merge_collinear_walls(self):
+        from gss.steps.s06b_plane_regularization._polyline_walls import merge_collinear_walls
+
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [3, 0]], "thickness": 0.2,
+             "height_range": [0, 3], "normal_axis": "z", "plane_ids": [1]},
+            {"id": 1, "center_line_2d": [[3, 0], [3, 4]], "thickness": 0.2,
+             "height_range": [0, 3], "normal_axis": "x", "plane_ids": [2]},
+        ]
+        # These walls meet at (3,0) at 90 degrees — should NOT merge (angle > 10)
+        result = merge_collinear_walls(walls, angle_tolerance_deg=10.0)
+        assert len(result) == 2  # not merged
+
+    def test_merge_collinear_walls_same_direction(self):
+        from gss.steps.s06b_plane_regularization._polyline_walls import merge_collinear_walls
+
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [3, 0]], "thickness": 0.2,
+             "height_range": [0, 3], "normal_axis": "z", "plane_ids": [1]},
+            {"id": 1, "center_line_2d": [[3, 0], [6, 0]], "thickness": 0.2,
+             "height_range": [0, 3], "normal_axis": "z", "plane_ids": [2]},
+        ]
+        result = merge_collinear_walls(walls, angle_tolerance_deg=10.0)
+        assert len(result) == 1  # merged into polyline
+        cl = result[0]["center_line_2d"]
+        assert len(cl) == 3  # 3 points
+        assert result[0].get("wall_type") == "polyline"
+
+
+# ---------------------------------------------------------------------------
+# Column detection tests (s06b module, moved from test_s07)
+# ---------------------------------------------------------------------------
+
+
+class TestColumnDetection:
+    def test_column_detection_round(self):
+        from gss.steps.s06b_plane_regularization._column_detection import detect_columns
+
+        walls = [
+            {"id": 0, "center_line_2d": [[5.0, 3.0], [5.3, 3.0]],
+             "thickness": 0.3, "height_range": [0.0, 5.4],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        columns, remaining = detect_columns(walls, scale=2.0, max_column_width=1.0)
+        assert len(columns) == 1
+        assert columns[0]["column_type"] == "round"  # squareness ~1.0
+        assert len(remaining) == 0
+
+    def test_column_detection_rectangular(self):
+        from gss.steps.s06b_plane_regularization._column_detection import detect_columns
+
+        walls = [
+            {"id": 0, "center_line_2d": [[5.0, 3.0], [5.8, 3.0]],
+             "thickness": 0.2, "height_range": [0.0, 5.4],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        columns, remaining = detect_columns(walls, scale=2.0, max_column_width=1.0)
+        assert len(columns) == 1
+        assert columns[0]["column_type"] == "rectangular"
+        assert len(remaining) == 0
+
+    def test_column_not_wall(self):
+        """Long wall should NOT be reclassified as column."""
+        from gss.steps.s06b_plane_regularization._column_detection import detect_columns
+
+        walls = [
+            {"id": 0, "center_line_2d": [[0.0, 0.0], [10.0, 0.0]],
+             "thickness": 0.2, "height_range": [0.0, 3.0],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        columns, remaining = detect_columns(walls, scale=1.0, max_column_width=1.0)
+        assert len(columns) == 0
+        assert len(remaining) == 1

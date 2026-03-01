@@ -45,14 +45,27 @@ def _walls_are_parallel(w1: dict, w2: dict, threshold: float = 0.98) -> bool:
 
 
 def _wall_direction(wall: dict) -> np.ndarray:
-    """Get wall's direction as a unit vector (along center-line)."""
+    """Get wall's overall direction as a unit vector (along center-line).
+
+    For N-point polylines, returns direction from first to last point.
+    """
     cl = wall["center_line_2d"]
-    p1, p2 = np.array(cl[0], dtype=float), np.array(cl[1], dtype=float)
+    p1, p2 = np.array(cl[0], dtype=float), np.array(cl[-1], dtype=float)
     d = p2 - p1
     length = np.linalg.norm(d)
     if length < 1e-12:
         return np.array([1.0, 0.0])
     return d / length
+
+
+def _wall_end_points(wall: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Get the first and last points of a wall center-line.
+
+    For N-point polylines, returns first and last point only
+    (interior points are preserved during intersection trimming).
+    """
+    cl = wall["center_line_2d"]
+    return np.array(cl[0], dtype=float), np.array(cl[-1], dtype=float)
 
 
 def _line_intersection_2d(
@@ -125,12 +138,12 @@ def _cluster_nearby_endpoints(walls: list[dict], snap_tolerance: float) -> int:
 
     Returns number of endpoints clustered.
     """
-    # Collect all endpoints with references
+    # Collect all endpoints with references (first/last for polylines)
     endpoints: list[tuple[np.ndarray, int, int]] = []  # (point, wall_idx, ep_idx)
     for wi, w in enumerate(walls):
         cl = w["center_line_2d"]
         endpoints.append((np.array(cl[0], dtype=float), wi, 0))
-        endpoints.append((np.array(cl[1], dtype=float), wi, 1))
+        endpoints.append((np.array(cl[-1], dtype=float), wi, len(cl) - 1))
 
     if len(endpoints) < 3:
         return 0
@@ -224,23 +237,25 @@ def _constrained_snap(
     cl = wall["center_line_2d"]
 
     if axis == "x":
-        # X-normal wall: compute wall's center X from both endpoints, keep it
-        wall_x = (cl[0][0] + cl[1][0]) / 2.0
+        # X-normal wall: compute wall's center X from first/last endpoints, keep it
+        wall_x = (cl[0][0] + cl[-1][0]) / 2.0
         return [wall_x, ix[1]]
     elif axis == "z":
-        # Z-normal wall: compute wall's center Z from both endpoints, keep it
-        wall_z = (cl[0][1] + cl[1][1]) / 2.0
+        # Z-normal wall: compute wall's center Z from first/last endpoints, keep it
+        wall_z = (cl[0][1] + cl[-1][1]) / 2.0
         return [ix[0], wall_z]
     else:
         # General case: project ix onto the wall's center-line (infinite line)
+        # For N-point polylines, use first/last points to define the line
         p1 = np.array(cl[0], dtype=float)
-        p2 = np.array(cl[1], dtype=float)
+        p2 = np.array(cl[-1], dtype=float)
         d = p2 - p1
         d_len_sq = np.dot(d, d)
         if d_len_sq < 1e-12:
             return ix.tolist()
         # Anchor is the other endpoint (the one not being snapped)
-        anchor = np.array(cl[1 - ep_idx], dtype=float)
+        anchor_idx = len(cl) - 1 if ep_idx == 0 else 0
+        anchor = np.array(cl[anchor_idx], dtype=float)
         t = np.dot(ix - anchor, d / d_len_sq * np.linalg.norm(d))
         d_norm = d / np.sqrt(d_len_sq)
         return (anchor + t * d_norm).tolist()
@@ -263,6 +278,10 @@ def _enforce_wall_straightness(walls: list[dict]) -> int:
     for w in walls:
         cl = w["center_line_2d"]
         axis = w.get("normal_axis", "")
+
+        # Skip polyline walls (N>2 points) - straightness is per-segment
+        if len(cl) > 2:
+            continue
 
         if axis == "x":
             avg_x = (cl[0][0] + cl[1][0]) / 2.0
@@ -317,7 +336,7 @@ def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
             a1 = walls[i].get("normal_axis", "")
             a2 = walls[j].get("normal_axis", "")
 
-            # Manhattan fast path
+            # Manhattan fast path (2-point walls only)
             if a1 in ("x", "z") and a2 in ("x", "z") and a1 != a2:
                 if a1 == "x":
                     w_x, w_z = walls[i], walls[j]
@@ -333,9 +352,9 @@ def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
 
                 for cl in [cl_x, cl_z]:
                     d0 = np.linalg.norm(np.array(cl[0]) - corner)
-                    d1 = np.linalg.norm(np.array(cl[1]) - corner)
-                    min_d = min(d0, d1)
-                    ep = 0 if d0 <= d1 else 1
+                    d_last = np.linalg.norm(np.array(cl[-1]) - corner)
+                    min_d = min(d0, d_last)
+                    ep = 0 if d0 <= d_last else len(cl) - 1
 
                     if min_d <= snap_tolerance:
                         cl[ep] = corner.tolist()
@@ -344,10 +363,11 @@ def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
                 # General case: compute line-line intersection
                 cl_i = walls[i]["center_line_2d"]
                 cl_j = walls[j]["center_line_2d"]
+                # Use first/last points for N-point polylines
                 p1 = np.array(cl_i[0], dtype=float)
-                p2 = np.array(cl_i[1], dtype=float)
+                p2 = np.array(cl_i[-1], dtype=float)
                 p3 = np.array(cl_j[0], dtype=float)
-                p4 = np.array(cl_j[1], dtype=float)
+                p4 = np.array(cl_j[-1], dtype=float)
 
                 ix = _line_intersection_2d(p1, p2, p3, p4)
                 if ix is None:
@@ -356,11 +376,11 @@ def _reconnect_corners(walls: list[dict], snap_tolerance: float) -> int:
                 # Check if any endpoint is close enough to reconnect
                 for cl in [cl_i, cl_j]:
                     ep0 = np.array(cl[0], dtype=float)
-                    ep1 = np.array(cl[1], dtype=float)
+                    ep_last = np.array(cl[-1], dtype=float)
                     d0 = float(np.linalg.norm(ep0 - ix))
-                    d1 = float(np.linalg.norm(ep1 - ix))
-                    min_d = min(d0, d1)
-                    ep = 0 if d0 <= d1 else 1
+                    d_last = float(np.linalg.norm(ep_last - ix))
+                    min_d = min(d0, d_last)
+                    ep = 0 if d0 <= d_last else len(cl) - 1
 
                     if min_d <= snap_tolerance:
                         cl[ep] = ix.tolist()
@@ -408,10 +428,11 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
 
             cl_i = walls[i]["center_line_2d"]
             cl_j = walls[j]["center_line_2d"]
+            # For N-point polylines, use first/last points for intersection
             p1 = np.array(cl_i[0], dtype=float)
-            p2 = np.array(cl_i[1], dtype=float)
+            p2 = np.array(cl_i[-1], dtype=float)
             p3 = np.array(cl_j[0], dtype=float)
-            p4 = np.array(cl_j[1], dtype=float)
+            p4 = np.array(cl_j[-1], dtype=float)
 
             ix = _line_intersection_2d(p1, p2, p3, p4)
             if ix is None:
@@ -439,7 +460,10 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
             )
 
             if snap_i:
-                cl_i[ep_i] = _constrained_snap(ix, walls[i], ep_i)
+                # For N-point polylines, ep_i=0 maps to index 0,
+                # ep_i=1 maps to last index
+                real_idx_i = 0 if ep_i == 0 else len(cl_i) - 1
+                cl_i[real_idx_i] = _constrained_snap(ix, walls[i], ep_i)
                 if reason_i == "close":
                     snapped_count += 1
                 elif reason_i == "extend":
@@ -452,7 +476,8 @@ def trim_intersections(walls: list[dict], snap_tolerance: float = 0.5) -> dict:
                 )
 
             if snap_j:
-                cl_j[ep_j] = _constrained_snap(ix, walls[j], ep_j)
+                real_idx_j = 0 if ep_j == 0 else len(cl_j) - 1
+                cl_j[real_idx_j] = _constrained_snap(ix, walls[j], ep_j)
                 if reason_j == "close":
                     snapped_count += 1
                 elif reason_j == "extend":

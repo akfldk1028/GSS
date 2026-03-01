@@ -58,11 +58,13 @@ def create_wall_from_centerline(
     wall_id = wall_data.get("id", 0)
     is_synthetic = wall_data.get("synthetic", False)
 
+    is_polyline = len(center_line) > 2
+
     # Manhattan coords → IFC (meters)
-    # center_line_2d: [[mx1, mz1], [mx2, mz2]]
-    # IFC XY plane: start=(mx1/s, mz1/s), end=(mx2/s, mz2/s)
-    sx, sy = center_line[0][0] / scale, center_line[0][1] / scale
-    ex, ey = center_line[1][0] / scale, center_line[1][1] / scale
+    cl_scaled = [[pt[0] / scale, pt[1] / scale] for pt in center_line]
+
+    sx, sy = cl_scaled[0]
+    ex, ey = cl_scaled[-1]
 
     # Use uniform storey heights when available (Cloud2BIM: walls span floor→ceiling)
     y_min = floor_z if floor_z is not None else height_range[0] / scale
@@ -74,9 +76,12 @@ def create_wall_from_centerline(
         logger.warning(f"Wall {wall_id}: degenerate geometry, skipping")
         return None
 
-    dx = ex - sx
-    dy = ey - sy
-    wall_length = math.sqrt(dx * dx + dy * dy)
+    # Compute total wall length
+    wall_length = 0.0
+    for i in range(len(cl_scaled) - 1):
+        dx = cl_scaled[i + 1][0] - cl_scaled[i][0]
+        dy = cl_scaled[i + 1][1] - cl_scaled[i][1]
+        wall_length += math.sqrt(dx * dx + dy * dy)
     if wall_length < 0.01:
         logger.warning(f"Wall {wall_id}: zero length, skipping")
         return None
@@ -89,13 +94,25 @@ def create_wall_from_centerline(
     # --- Axis representation (center-line as Curve2D) ---
     representations = []
     if create_axis and ctx.axis_context is not None:
-        axis_repr = _create_axis_representation(ifc, ctx.axis_context, sx, sy, ex, ey)
+        if is_polyline:
+            axis_repr = _create_axis_representation_polyline(
+                ifc, ctx.axis_context, cl_scaled,
+            )
+        else:
+            axis_repr = _create_axis_representation(
+                ifc, ctx.axis_context, sx, sy, ex, ey,
+            )
         representations.append(axis_repr)
 
-    # --- Body representation (IfcRectangleProfileDef + extrusion) ---
-    body_repr = _create_body_representation(
-        ifc, ctx.body_context, sx, sy, ex, ey, wall_length, wall_thickness, wall_height
-    )
+    # --- Body representation (IfcArbitraryClosedProfileDef polyline + extrusion) ---
+    if is_polyline:
+        body_repr = _create_body_representation_polyline(
+            ifc, ctx.body_context, cl_scaled, wall_thickness, wall_height,
+        )
+    else:
+        body_repr = _create_body_representation(
+            ifc, ctx.body_context, sx, sy, ex, ey, wall_thickness, wall_height,
+        )
     representations.append(body_repr)
 
     product_shape = ifc.createIfcProductDefinitionShape(None, None, representations)
@@ -151,6 +168,63 @@ def _create_axis_representation(
     )
 
 
+def _create_axis_representation_polyline(
+    ifc: Any, axis_ctx: Any, cl_scaled: list[list[float]],
+) -> Any:
+    """Axis representation: N-point center-line polyline in 2D."""
+    pts = [ifc.createIfcCartesianPoint([float(p[0]), float(p[1])]) for p in cl_scaled]
+    polyline = ifc.createIfcPolyline(pts)
+    return ifc.createIfcShapeRepresentation(
+        axis_ctx, "Axis", "Curve2D", [polyline]
+    )
+
+
+def _create_body_representation_polyline(
+    ifc: Any,
+    body_ctx: Any,
+    cl_scaled: list[list[float]],
+    wall_thickness: float,
+    wall_height: float,
+) -> Any:
+    """Body representation for N-point polyline wall using Shapely buffer.
+
+    Creates a closed polygon by buffering the polyline center-line,
+    then extrudes upward.
+    """
+    try:
+        from shapely.geometry import LineString
+    except ImportError:
+        logger.warning("Shapely not available, falling back to 2-point wall")
+        sx, sy = cl_scaled[0]
+        ex, ey = cl_scaled[-1]
+        return _create_body_representation(
+            ifc, body_ctx, sx, sy, ex, ey, wall_thickness, wall_height,
+        )
+
+    line = LineString(cl_scaled)
+    half_t = wall_thickness / 2.0
+    buffered = line.buffer(half_t, cap_style=2, join_style=2)  # flat cap, mitre join
+
+    # Extract exterior polygon coordinates
+    polygon_coords = list(buffered.exterior.coords)
+
+    # Create IFC polyline from polygon
+    ifc_pts = [
+        ifc.createIfcCartesianPoint([float(c[0]), float(c[1])])
+        for c in polygon_coords
+    ]
+    polyline = ifc.createIfcPolyline(ifc_pts)
+    profile = ifc.createIfcArbitraryClosedProfileDef("AREA", "Wall Profile", polyline)
+
+    # Extrude upward (z direction)
+    ext_dir = ifc.createIfcDirection([0.0, 0.0, 1.0])
+    solid = ifc.createIfcExtrudedAreaSolid(profile, None, ext_dir, float(wall_height))
+
+    return ifc.createIfcShapeRepresentation(
+        body_ctx, "Body", "SweptSolid", [solid]
+    )
+
+
 def _create_body_representation(
     ifc: Any,
     body_ctx: Any,
@@ -158,29 +232,36 @@ def _create_body_representation(
     sy: float,
     ex: float,
     ey: float,
-    wall_length: float,
     wall_thickness: float,
     wall_height: float,
 ) -> Any:
-    """Body representation: IfcRectangleProfileDef extruded upward."""
-    # Rectangle center = midpoint of center-line
-    mid_x = (sx + ex) / 2.0
-    mid_y = (sy + ey) / 2.0
-    center = ifc.createIfcCartesianPoint([float(mid_x), float(mid_y)])
+    """Body representation: IfcArbitraryClosedProfileDef polyline extruded upward.
 
-    # Direction along wall
+    Constructs a closed rectangular polyline from center-line endpoints offset
+    by ±thickness/2 in the perpendicular direction, then extrudes upward.
+    This replaces IfcRectangleProfileDef for better compatibility with
+    non-axis-aligned and future multi-segment walls.
+    """
+    # Perpendicular direction (90° CCW from wall direction)
     dx = ex - sx
     dy = ey - sy
     mag = math.sqrt(dx * dx + dy * dy)
-    dir_x = float(dx / mag)
-    dir_y = float(dy / mag)
-    ref_dir = ifc.createIfcDirection([dir_x, dir_y])
+    perp_x = float(-dy / mag)
+    perp_y = float(dx / mag)
+    half_t = wall_thickness / 2.0
 
-    placement_2d = ifc.createIfcAxis2Placement2D(center, ref_dir)
+    # 4 corners offset from center-line, closed (5 points)
+    corners = [
+        [sx + perp_x * half_t, sy + perp_y * half_t],  # start-left
+        [ex + perp_x * half_t, ey + perp_y * half_t],  # end-left
+        [ex - perp_x * half_t, ey - perp_y * half_t],  # end-right
+        [sx - perp_x * half_t, sy - perp_y * half_t],  # start-right
+        [sx + perp_x * half_t, sy + perp_y * half_t],  # close
+    ]
 
-    profile = ifc.createIfcRectangleProfileDef(
-        "AREA", "Wall Profile", placement_2d, float(wall_length), float(wall_thickness)
-    )
+    ifc_pts = [ifc.createIfcCartesianPoint([float(c[0]), float(c[1])]) for c in corners]
+    polyline = ifc.createIfcPolyline(ifc_pts)
+    profile = ifc.createIfcArbitraryClosedProfileDef("AREA", "Wall Profile", polyline)
 
     # Extrude upward (z direction)
     ext_dir = ifc.createIfcDirection([0.0, 0.0, 1.0])

@@ -1,22 +1,10 @@
-"""Tests for S07: IFC Export step (center-line based, Cloud2BIM pattern)."""
+"""Tests for S07: IFC Export step — core builder & integration."""
 
 from pathlib import Path
 
-import pytest
-
 from gss.steps.s07_ifc_export.config import IfcExportConfig
 from gss.steps.s07_ifc_export.contracts import IfcExportInput, IfcExportOutput
-
-
-def _has_ifcopenshell() -> bool:
-    try:
-        import ifcopenshell
-        return True
-    except ImportError:
-        return False
-
-
-needs_ifc = pytest.mark.skipif(not _has_ifcopenshell(), reason="ifcopenshell not installed")
+from tests.test_steps.conftest import needs_ifc
 
 
 # ── Contract tests ──
@@ -98,273 +86,6 @@ class TestIfcBuilder:
         assert person.GivenName == "Alice"
         org = oh.OwningUser.TheOrganization
         assert org.Name == "ACME"
-
-
-@needs_ifc
-class TestWallBuilder:
-    def _make_ctx(self):
-        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
-        return create_ifc_file()
-
-    def test_basic_wall(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[0.0, 0.0], [3.0, 0.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(ctx, wall_data, scale=1.0)
-        assert wall is not None
-        assert wall.is_a("IfcWall")
-        assert wall.Name == "Wall_0"
-
-    def test_wall_with_axis_representation(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 1,
-            "center_line_2d": [[0.0, 0.0], [5.0, 0.0]],
-            "thickness": 0.3,
-            "height_range": [0.0, 2.8],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(ctx, wall_data, scale=1.0, create_axis=True)
-        assert wall is not None
-
-        # Check dual representation (Axis + Body)
-        reps = wall.Representation.Representations
-        rep_ids = [r.RepresentationIdentifier for r in reps]
-        assert "Axis" in rep_ids
-        assert "Body" in rep_ids
-
-    def test_wall_without_axis(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 2,
-            "center_line_2d": [[0.0, 0.0], [4.0, 0.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(ctx, wall_data, scale=1.0, create_axis=False)
-        reps = wall.Representation.Representations
-        rep_ids = [r.RepresentationIdentifier for r in reps]
-        assert "Axis" not in rep_ids
-        assert "Body" in rep_ids
-
-    def test_rectangle_profile(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[0.0, 0.0], [4.0, 0.0]],
-            "thickness": 0.25,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(
-            ctx, wall_data, scale=1.0,
-            create_axis=False, create_material_layers=False,
-            create_wall_type=False, create_property_set=False,
-        )
-        # Find the IfcRectangleProfileDef
-        profiles = ctx.ifc.by_type("IfcRectangleProfileDef")
-        assert len(profiles) >= 1
-        p = profiles[0]
-        assert abs(p.XDim - 4.0) < 0.001  # wall length
-        assert abs(p.YDim - 0.25) < 0.001  # wall thickness
-
-    def test_material_layer_set(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[0.0, 0.0], [3.0, 0.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(
-            ctx, wall_data, scale=1.0, create_material_layers=True
-        )
-        # Verify IfcMaterialLayerSetUsage exists
-        usages = ctx.ifc.by_type("IfcMaterialLayerSetUsage")
-        assert len(usages) >= 1
-        assert usages[0].LayerSetDirection == "AXIS2"
-
-    def test_wall_type(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[0.0, 0.0], [3.0, 0.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-        }
-        create_wall_from_centerline(ctx, wall_data, scale=1.0, create_wall_type=True)
-
-        wall_types = ctx.ifc.by_type("IfcWallType")
-        assert len(wall_types) >= 1
-        assert wall_types[0].PredefinedType == "SOLIDWALL"
-
-        # IfcRelDefinesByType should exist
-        rel_types = ctx.ifc.by_type("IfcRelDefinesByType")
-        assert len(rel_types) >= 1
-
-    def test_property_set_synthetic(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 5,
-            "center_line_2d": [[0.0, 0.0], [2.0, 0.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-            "normal_axis": "z",
-            "synthetic": True,
-        }
-        wall = create_wall_from_centerline(ctx, wall_data, scale=1.0, create_property_set=True)
-        assert wall.Name == "Wall_5_Synthetic"
-
-        psets = ctx.ifc.by_type("IfcPropertySet")
-        assert len(psets) >= 1
-        pset = psets[0]
-        prop_names = [p.Name for p in pset.HasProperties]
-        assert "IsExternal" in prop_names
-        assert "Synthetic" in prop_names
-        assert "Source" in prop_names
-
-    def test_wall_scale(self):
-        """Coordinate scale should divide all coordinates."""
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[0.0, 0.0], [2.0, 0.0]],
-            "thickness": 0.4,
-            "height_range": [0.0, 6.0],
-            "normal_axis": "z",
-        }
-        wall = create_wall_from_centerline(
-            ctx, wall_data, scale=2.0,
-            create_axis=False, create_material_layers=False,
-            create_wall_type=False, create_property_set=False,
-        )
-        # With scale=2.0: length=1.0, thickness=0.2, height=3.0
-        profiles = ctx.ifc.by_type("IfcRectangleProfileDef")
-        p = profiles[0]
-        assert abs(p.XDim - 1.0) < 0.001
-        assert abs(p.YDim - 0.2) < 0.001
-
-    def test_degenerate_wall_skipped(self):
-        from gss.steps.s07_ifc_export._wall_builder import create_wall_from_centerline
-
-        ctx = self._make_ctx()
-        # Zero-length wall
-        wall_data = {
-            "id": 0,
-            "center_line_2d": [[1.0, 1.0], [1.0, 1.0]],
-            "thickness": 0.2,
-            "height_range": [0.0, 3.0],
-        }
-        wall = create_wall_from_centerline(ctx, wall_data, scale=1.0)
-        assert wall is None
-
-
-@needs_ifc
-class TestSlabBuilder:
-    def _make_ctx(self):
-        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
-        return create_ifc_file()
-
-    def test_floor_slab(self):
-        from gss.steps.s07_ifc_export._slab_builder import create_floor_slab
-
-        ctx = self._make_ctx()
-        space = {
-            "id": 0,
-            "boundary_2d": [[-1, 3], [1, 3], [1, -1], [-1, -1], [-1, 3]],
-            "floor_height": -0.5,
-            "ceiling_height": 2.5,
-        }
-        slab = create_floor_slab(ctx, space, scale=1.0, thickness=0.3)
-        assert slab is not None
-        assert slab.is_a("IfcSlab")
-        assert slab.Name == "Floor_Room0"
-
-    def test_ceiling_slab(self):
-        from gss.steps.s07_ifc_export._slab_builder import create_ceiling_slab
-
-        ctx = self._make_ctx()
-        space = {
-            "id": 0,
-            "boundary_2d": [[-1, 3], [1, 3], [1, -1], [-1, -1], [-1, 3]],
-            "floor_height": -0.5,
-            "ceiling_height": 2.5,
-        }
-        slab = create_ceiling_slab(ctx, space, scale=1.0, thickness=0.3)
-        assert slab is not None
-        assert slab.Name == "Ceiling_Room0"
-
-
-@needs_ifc
-class TestSpaceBuilder:
-    def _make_ctx(self):
-        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
-        return create_ifc_file()
-
-    def test_create_space(self):
-        from gss.steps.s07_ifc_export._space_builder import create_space
-
-        ctx = self._make_ctx()
-        space_data = {
-            "id": 0,
-            "boundary_2d": [[-1, 3], [1, 3], [1, -1], [-1, -1], [-1, 3]],
-            "area": 8.0,
-            "floor_height": -0.5,
-            "ceiling_height": 2.5,
-        }
-        space = create_space(ctx, space_data, scale=1.0)
-        assert space is not None
-        assert space.is_a("IfcSpace")
-        assert space.Name == "Room_0"
-
-        # Check property set
-        psets = ctx.ifc.by_type("IfcPropertySet")
-        pset_names = [ps.Name for ps in psets]
-        assert "Pset_SpaceCommon" in pset_names
-
-    def test_space_area_scaled(self):
-        from gss.steps.s07_ifc_export._space_builder import create_space
-
-        ctx = self._make_ctx()
-        space_data = {
-            "id": 0,
-            "boundary_2d": [[-2, 6], [2, 6], [2, -2], [-2, -2], [-2, 6]],
-            "area": 32.0,
-            "floor_height": 0.0,
-            "ceiling_height": 4.0,
-        }
-        create_space(ctx, space_data, scale=2.0)
-        # area_m2 = 32.0 / (2.0*2.0) = 8.0
-        psets = ctx.ifc.by_type("IfcPropertySet")
-        for ps in psets:
-            if ps.Name == "Pset_SpaceCommon":
-                for prop in ps.HasProperties:
-                    if prop.Name == "GrossFloorArea":
-                        assert abs(prop.NominalValue.wrappedValue - 8.0) < 0.01
 
 
 # ── Integration test ──
@@ -479,18 +200,27 @@ class TestIfcExportStep:
         import ifcopenshell
         ifc = ifcopenshell.open(str(output.ifc_path))
 
-        # Check that rectangle profiles have correct dimensions
-        profiles = ifc.by_type("IfcRectangleProfileDef")
+        # Check that polyline profiles have correct bounding box dimensions
+        profiles = ifc.by_type("IfcArbitraryClosedProfileDef")
         assert len(profiles) >= 1
 
-        # Wall 0: center_line [[-1, 3], [1, 3]] → length 2.0, thickness 0.2
-        # Wall 1: center_line [[-1, -1], [-1, 3]] → length 4.0, thickness 0.2
-        lengths = sorted([p.XDim for p in profiles])
+        # Compute wall length = longer bbox dimension for each profile
+        lengths = []
+        for p in profiles:
+            pts = p.OuterCurve.Points
+            xs = [pt.Coordinates[0] for pt in pts]
+            ys = [pt.Coordinates[1] for pt in pts]
+            w = max(xs) - min(xs)
+            h = max(ys) - min(ys)
+            lengths.append(max(w, h))  # longer dim = wall length
+        lengths.sort()
+        # Wall 0: center_line [[-1, 3], [1, 3]] → length 2.0
+        # Wall 1: center_line [[-1, -1], [-1, 3]] → length 4.0
         assert abs(lengths[0] - 2.0) < 0.01  # short walls
         assert abs(lengths[-1] - 4.0) < 0.01  # long walls
 
 
-# ── Phase 3: Multi-storey tests ──
+# ── Multi-storey tests ──
 
 
 @needs_ifc
@@ -563,58 +293,7 @@ class TestMultiStoreyBuilder:
         assert s == ctx.storey
 
 
-# ── Phase 4: Roof builder tests ──
-
-
-@needs_ifc
-class TestRoofBuilder:
-    def _make_ctx(self):
-        from gss.steps.s07_ifc_export._ifc_builder import create_ifc_file
-        return create_ifc_file()
-
-    def test_flat_roof(self):
-        from gss.steps.s07_ifc_export._roof_builder import create_roof
-
-        ctx = self._make_ctx()
-        roof_planes = [{
-            "id": 0, "label": "roof", "roof_type": "flat",
-            "normal": [0.0, 1.0, 0.0], "d": -3.5,
-            "boundary_3d": [[0, 3.5, 0], [5, 3.5, 0], [5, 3.5, 4], [0, 3.5, 4]],
-        }]
-        ifc_roof, count = create_roof(ctx, roof_planes, scale=1.0)
-        assert ifc_roof is not None
-        assert ifc_roof.is_a("IfcRoof")
-        assert count == 1
-        # Should have IfcSlab with ROOF type
-        slabs = ctx.ifc.by_type("IfcSlab")
-        roof_slabs = [s for s in slabs if s.PredefinedType == "ROOF"]
-        assert len(roof_slabs) == 1
-
-    def test_no_roof_planes(self):
-        from gss.steps.s07_ifc_export._roof_builder import create_roof
-
-        ctx = self._make_ctx()
-        ifc_roof, count = create_roof(ctx, [], scale=1.0)
-        assert ifc_roof is None
-        assert count == 0
-
-    def test_multiple_roof_slabs(self):
-        from gss.steps.s07_ifc_export._roof_builder import create_roof
-
-        ctx = self._make_ctx()
-        roof_planes = [
-            {"id": 0, "label": "roof", "roof_type": "flat",
-             "normal": [0.0, 1.0, 0.0], "d": -3.5,
-             "boundary_3d": [[0, 3.5, 0], [5, 3.5, 0], [5, 3.5, 4], [0, 3.5, 4]]},
-            {"id": 1, "label": "roof", "roof_type": "flat",
-             "normal": [0.0, 1.0, 0.0], "d": -4.0,
-             "boundary_3d": [[0, 4.0, 0], [3, 4.0, 0], [3, 4.0, 2], [0, 4.0, 2]]},
-        ]
-        _, count = create_roof(ctx, roof_planes, scale=1.0)
-        assert count == 2
-
-
-# ── Phase 5: Site footprint tests ──
+# ── Site footprint tests ──
 
 
 @needs_ifc
@@ -645,3 +324,35 @@ class TestSiteFootprint:
         footprint = [[0.0, 0.0], [10.0, 0.0], [10.0, 8.0], [0.0, 8.0]]
         set_site_footprint(ctx, footprint, scale=2.0)
         assert ctx.site.Representation is not None
+
+
+# ── Contract tests for new output fields ──
+
+
+class TestNewOutputFields:
+    def test_output_has_roof_fields(self):
+        schema = IfcExportOutput.model_json_schema()
+        assert "num_roof_slabs" in schema["properties"]
+        assert "roof_type" in schema["properties"]
+        assert "num_columns" in schema["properties"]
+        assert "num_tessellated" in schema["properties"]
+
+    def test_output_defaults(self):
+        out = IfcExportOutput(ifc_path=Path("/tmp/test.ifc"))
+        assert out.num_roof_slabs == 0
+        assert out.roof_type == "none"
+        assert out.num_columns == 0
+        assert out.num_tessellated == 0
+
+    def test_config_new_toggles(self):
+        cfg = IfcExportConfig()
+        assert cfg.create_roof_annotations is True
+        assert cfg.create_columns is True
+        assert cfg.create_tessellated is True
+        assert cfg.tessellation_max_faces == 50000
+
+    def test_input_new_fields(self):
+        inp = IfcExportInput(walls_file=Path("/tmp/walls.json"))
+        assert inp.building_context_file is None
+        assert inp.columns_file is None
+        assert inp.mesh_elements_file is None

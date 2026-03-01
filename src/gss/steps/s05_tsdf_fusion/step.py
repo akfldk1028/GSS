@@ -99,6 +99,16 @@ class TsdfFusionStep(BaseStep[TsdfFusionInput, TsdfFusionOutput, TsdfFusionConfi
         num_points = len(pcd.points)
         logger.info(f"Extracted {num_points} surface points")
 
+        # Extract triangle mesh (preserved for s06d mesh segmentation)
+        mesh = volume.extract_triangle_mesh()
+        mesh.compute_vertex_normals()
+        mesh_path = output_dir / "surface_mesh.ply"
+        o3d.io.write_triangle_mesh(str(mesh_path), mesh)
+
+        num_mesh_verts = len(mesh.vertices)
+        num_mesh_faces = len(mesh.triangles)
+        logger.info(f"Extracted mesh: {num_mesh_verts} vertices, {num_mesh_faces} faces")
+
         # Save metadata
         metadata = {
             "voxel_size": self.config.voxel_size,
@@ -106,6 +116,8 @@ class TsdfFusionStep(BaseStep[TsdfFusionInput, TsdfFusionOutput, TsdfFusionConfi
             "depth_trunc": self.config.depth_trunc,
             "num_integrated_views": integrated,
             "num_surface_points": num_points,
+            "num_mesh_vertices": num_mesh_verts,
+            "num_mesh_faces": num_mesh_faces,
         }
         metadata_path = output_dir / "metadata.json"
         with open(metadata_path, "w") as f:
@@ -116,4 +128,7 @@ class TsdfFusionStep(BaseStep[TsdfFusionInput, TsdfFusionOutput, TsdfFusionConfi
             surface_points_path=surface_path,
             num_surface_points=num_points,
             metadata_path=metadata_path,
+            surface_mesh_path=mesh_path,
+            num_mesh_vertices=num_mesh_verts,
+            num_mesh_faces=num_mesh_faces,
         )
