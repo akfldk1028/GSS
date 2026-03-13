@@ -37,5 +37,14 @@ class MeshExportConfig(BaseModel):
     )
 
     # USD-specific
-    usd_up_axis: Literal["Y", "Z"] = Field("Z", description="USD stage up axis")
+    usd_up_axis: Literal["Y", "Z"] = Field(
+        "Y",
+        description="USD stage up axis. Y-up is standard for Isaac Sim / Omniverse / glTF. "
+                    "Z-up matches IFC convention but requires manual axis correction in most viewers.",
+    )
     usd_meters_per_unit: float = Field(1.0, description="USD meters per unit")
+    usd_double_sided: bool = Field(
+        True,
+        description="Mark meshes as double-sided in USD. "
+                    "Required for thin BIM geometry (walls) visible from both sides.",
+    )

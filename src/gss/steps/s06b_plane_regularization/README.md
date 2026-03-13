@@ -33,9 +33,11 @@ Also reads `manhattan_alignment.json` from `data/interim/s06_planes/`.
 3. **C. Wall Thickness** (`_wall_thickness.py`) -- parallel pair detection + center-lines. Supports both Manhattan (string axis "x"/"z") and arbitrary-angle walls (vector-based grouping, "oblique:<angle>" axis label).
 4. **C2. Wall Closure** (`_wall_closure.py`) -- synthesize missing walls. Manhattan: AABB edges. Cluster: ConvexHull edges for arbitrary building shapes.
 5. **D. Intersection Trimming** (`_intersection_trimming.py`) -- endpoint snapping to corners (see below)
-6. **E. Space Detection** (`_space_detection.py`) -- Shapely polygonize to room boundaries
-7. **G. Exterior Classification** (`_exterior_classification.py`) -- ConvexHull-based interior/exterior wall labeling (disabled by default)
-8. **F. Opening Detection** (`_opening_detection.py`) -- Cloud2BIM histogram void detection for doors/windows (disabled by default). Surface points are rotated from COLMAP → Manhattan space via `manhattan_rotation` before inlier extraction. u coordinate measured from p1 in p1→p2 direction (matches s07 opening builder convention).
+6. **H2. Polyline Merging** (`_polyline_walls.py`) -- merge collinear 2-point walls sharing an endpoint into N-point polyline center-lines (disabled by default, `enable_polyline_merging: true`)
+7. **I. Column Detection** (`_column_detection.py`) -- reclassify short walls as columns (disabled by default)
+8. **E. Space Detection** (`_space_detection.py`) -- Shapely polygonize to room boundaries
+9. **G. Exterior Classification** (`_exterior_classification.py`) -- ConvexHull-based interior/exterior wall labeling (disabled by default)
+10. **F. Opening Detection** (`_opening_detection.py`) -- Cloud2BIM histogram void detection for doors/windows (disabled by default). Surface points are rotated from COLMAP → Manhattan space via `manhattan_rotation` before inlier extraction. u coordinate measured from p1 in p1→p2 direction (matches s07 opening builder convention).
 
 ### D. Intersection Trimming Details
 
@@ -72,6 +74,17 @@ Uses the convex hull of wall center-line midpoints to classify walls:
 
 Cluster mode uses greedy angle clustering with `cluster_angle_tolerance` (default 15°).
 Both modes are backward compatible — Manhattan data produces identical results in either mode.
+
+## N-Point Polyline Walls
+
+When `enable_polyline_merging: true`, collinear walls sharing an endpoint are merged
+into N-point polyline center-lines (e.g., L-shaped wall = 3 points). All downstream
+code supports N-point walls:
+
+- `_transform_walls_from_manhattan()`: converts each point to 3D + inverse rotation
+- `_rebuild_wall_boundary()`: strip boundary (N bottom + N top reversed + close)
+- `visualize_planes_3d.py`: renders one quad per segment
+- s07 `_wall_builder.py`: already supports polyline profiles via `IfcArbitraryClosedProfileDef`
 
 ## Coordinate System
 

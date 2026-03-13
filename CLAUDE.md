@@ -86,7 +86,10 @@ Each step module has exactly 5 files:
 | C | `_wall_thickness` | Parallel pair detection + center-lines |
 | C2 | `_wall_closure` | Synthesize missing walls from floor boundary |
 | D | `_intersection_trimming` | Snap wall endpoints to corners |
+| H2 | `_polyline_walls` | Merge collinear walls → N-point polyline center-lines |
+| I | `_column_detection` | Reclassify short walls as columns |
 | E | `_space_detection` | Polygonize center-lines → room boundaries |
+| G | `_exterior_classification` | Interior/exterior wall labeling (disabled by default) |
 | F | `_opening_detection` | Door/window detection via Cloud2BIM histogram (disabled by default) |
 
 ## s06c Building Extraction Sub-modules
@@ -112,6 +115,8 @@ IfcProject → IfcSite → IfcBuilding → IfcBuildingStorey
 ## s08 Mesh Export
 - IFC → GLB (trimesh) + USDC (usd-core, optional) + USDZ (optional)
 - `_ifc_to_mesh.py`: ifcopenshell.geom → MeshData(name, verts, faces, color, ifc_class)
-- `_glb_writer.py`: trimesh.Scene → GLB (Z-up → Y-up: `(x,y,z)→(x,z,-y)`)
-- `_usd_writer.py`: pxr UsdGeom.Mesh + UsdPreviewSurface materials → USDC (Y-up 시 동일 변환)
+- `_glb_writer.py`: trimesh.Scene → GLB (Z-up → Y-up: `(x,y,z)→(x,z,-y)`, sanitized node names)
+- `_usd_writer.py`: UsdGeom.Mesh + normals + doubleSided + displayName + UsdPreviewSurface → USDC
+- Default: `usd_up_axis=Y` (Isaac Sim/Omniverse standard), `usd_double_sided=true`
+- Cross-platform: USDZ POSIX paths, GLB node sanitization, OSError graceful warning
 - Both trimesh and usd-core: graceful degradation (`_has_trimesh()`, `_has_pxr()`)

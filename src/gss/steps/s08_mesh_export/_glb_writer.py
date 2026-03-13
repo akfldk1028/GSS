@@ -59,8 +59,9 @@ def write_glb(meshes: list[MeshData], output_path: Path) -> Path:
             process=False,
         )
 
-        # Use unique node name to avoid collisions
-        node_name = mesh_data.name.replace(" ", "_").replace("/", "_")
+        # Sanitize node name for cross-platform compatibility
+        # Replace all non-alphanumeric chars (including \ from Windows paths)
+        node_name = "".join(c if c.isalnum() or c == "_" else "_" for c in mesh_data.name)
         scene.add_geometry(mesh, node_name=node_name)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

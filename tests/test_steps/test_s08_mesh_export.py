@@ -49,8 +49,9 @@ class TestMeshExportContracts:
         assert cfg.export_usdz is False
         assert cfg.color_scheme == "by_class"
         assert cfg.include_spaces is False
-        assert cfg.usd_up_axis == "Z"
+        assert cfg.usd_up_axis == "Y"  # Y-up: Isaac Sim / Omniverse standard
         assert cfg.usd_meters_per_unit == 1.0
+        assert cfg.usd_double_sided is True
 
     def test_config_color_overrides(self):
         cfg = MeshExportConfig(
@@ -239,7 +240,7 @@ class TestUsdWriter:
             )
         ]
         output = tmp_path / "test.usdc"
-        result = write_usd(meshes, output)
+        result = write_usd(meshes, output, up_axis="Z")
 
         assert result.exists()
         assert result.stat().st_size > 0
@@ -258,8 +259,105 @@ class TestUsdWriter:
                 mat, _ = mat_api.ComputeBoundMaterial()
                 assert mat.GetPath().pathString != ""
 
+    def test_usd_normals_written(self, tmp_path: Path):
+        """USD meshes should have vertex normals for proper Isaac Sim shading."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._usd_writer import write_usd
+
+        meshes = [MeshData(
+            name="NormTest", ifc_class="IfcWall",
+            vertices=np.array([
+                [0, 0, 0], [1, 0, 0], [0, 1, 0],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "normals.usdc"
+        write_usd(meshes, output, up_axis="Z")
+
+        from pxr import Usd, UsdGeom
+        stage = Usd.Stage.Open(str(output))
+        prim = stage.GetPrimAtPath("/Building/NormTest")
+        mesh_prim = UsdGeom.Mesh(prim)
+
+        normals = mesh_prim.GetNormalsAttr().Get()
+        assert normals is not None
+        assert len(normals) == 3  # one per vertex
+        # All normals should point in +Z for this XY-plane triangle
+        for n in normals:
+            assert abs(n[2]) > 0.9  # Z component dominant
+
+        assert mesh_prim.GetNormalsInterpolation() == UsdGeom.Tokens.vertex
+
+    def test_usd_double_sided(self, tmp_path: Path):
+        """USD meshes should have doubleSided=True for thin BIM walls."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._usd_writer import write_usd
+
+        meshes = [MeshData(
+            name="DSTest", ifc_class="IfcWall",
+            vertices=np.array([
+                [0, 0, 0], [1, 0, 0], [0, 1, 0],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "ds.usdc"
+        write_usd(meshes, output, up_axis="Z", double_sided=True)
+
+        from pxr import Usd, UsdGeom
+        stage = Usd.Stage.Open(str(output))
+        prim = stage.GetPrimAtPath("/Building/DSTest")
+        mesh_prim = UsdGeom.Mesh(prim)
+        assert mesh_prim.GetDoubleSidedAttr().Get() is True
+
+    def test_usd_double_sided_off(self, tmp_path: Path):
+        """double_sided=False should not set the attribute to True."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._usd_writer import write_usd
+
+        meshes = [MeshData(
+            name="NoDSTest", ifc_class="IfcWall",
+            vertices=np.array([
+                [0, 0, 0], [1, 0, 0], [0, 1, 0],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "nods.usdc"
+        write_usd(meshes, output, up_axis="Z", double_sided=False)
+
+        from pxr import Usd, UsdGeom
+        stage = Usd.Stage.Open(str(output))
+        prim = stage.GetPrimAtPath("/Building/NoDSTest")
+        mesh_prim = UsdGeom.Mesh(prim)
+        # When double_sided=False, attribute should not be explicitly set to True
+        ds_val = mesh_prim.GetDoubleSidedAttr().Get()
+        assert ds_val is None or ds_val is False
+
+    def test_usd_display_name(self, tmp_path: Path):
+        """USD prims should have displayName metadata for Omniverse UI."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._usd_writer import write_usd
+
+        meshes = [MeshData(
+            name="Wall_North_01", ifc_class="IfcWall",
+            vertices=np.array([
+                [0, 0, 0], [1, 0, 0], [0, 1, 0],
+            ], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "displayname.usdc"
+        write_usd(meshes, output, up_axis="Z")
+
+        from pxr import Usd
+        stage = Usd.Stage.Open(str(output))
+        prim = stage.GetPrimAtPath("/Building/Wall_North_01")
+        assert prim.GetMetadata("displayName") == "Wall_North_01"
+
     def test_usd_zup_preserves_vertices(self, tmp_path: Path):
-        """With up_axis=Z (default), vertices should be preserved as-is."""
+        """With up_axis=Z, vertices should be preserved as-is."""
         from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
         from gss.steps.s08_mesh_export._usd_writer import write_usd
 
@@ -303,6 +401,87 @@ class TestUsdWriter:
         loaded = np.array(mesh_prim.GetPointsAttr().Get())
         expected = np.array([[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]])
         np.testing.assert_allclose(loaded, expected, atol=1e-5)
+
+
+# ── Normals computation tests ──
+
+
+class TestComputeNormals:
+    def test_single_triangle_normal(self):
+        """Single XY-plane triangle should have Z-up normal."""
+        from gss.steps.s08_mesh_export._usd_writer import _compute_normals
+
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64)
+        faces = np.array([[0, 1, 2]], dtype=np.int32)
+        normals = _compute_normals(verts, faces)
+
+        assert normals.shape == (3, 3)
+        for n in normals:
+            np.testing.assert_allclose(n, [0, 0, 1], atol=1e-10)
+
+    def test_two_triangles_shared_vertex(self):
+        """Shared vertex should average normals from both faces."""
+        from gss.steps.s08_mesh_export._usd_writer import _compute_normals
+
+        verts = np.array([
+            [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        ], dtype=np.float64)
+        faces = np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32)
+        normals = _compute_normals(verts, faces)
+
+        assert normals.shape == (4, 3)
+        # vertex 0 is shared — its normal should be average of both face normals
+        n0 = normals[0]
+        assert np.linalg.norm(n0) > 0.99  # unit length
+
+
+# ── GLB node name sanitization ──
+
+
+@needs_trimesh
+class TestGlbNodeSanitization:
+    def test_backslash_in_name(self, tmp_path: Path):
+        """Windows-style backslash in mesh name should be sanitized."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._glb_writer import write_glb
+
+        meshes = [MeshData(
+            name="Wall\\Sub\\01", ifc_class="IfcWall",
+            vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "sanitize.glb"
+        result = write_glb(meshes, output)
+
+        assert result.exists()
+        import trimesh
+        scene = trimesh.load(str(result))
+        # Node name should not contain backslash
+        for name in scene.geometry:
+            assert "\\" not in name
+
+    def test_special_chars_in_name(self, tmp_path: Path):
+        """Special characters (spaces, slashes, colons) should be sanitized."""
+        from gss.steps.s08_mesh_export._ifc_to_mesh import MeshData
+        from gss.steps.s08_mesh_export._glb_writer import write_glb
+
+        meshes = [MeshData(
+            name="Wall 0/sub:part", ifc_class="IfcWall",
+            vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float64),
+            faces=np.array([[0, 1, 2]], dtype=np.int32),
+            color=[0.8, 0.8, 0.8, 1.0],
+        )]
+        output = tmp_path / "special.glb"
+        result = write_glb(meshes, output)
+
+        assert result.exists()
+        import trimesh
+        scene = trimesh.load(str(result))
+        for name in scene.geometry:
+            assert " " not in name
+            assert "/" not in name
+            assert ":" not in name
 
 
 # ── Integration test ──

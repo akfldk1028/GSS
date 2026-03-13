@@ -16,5 +16,6 @@ color_space: [0.9, 0.95, 1.0, 0.3]
 color_default: [0.8, 0.8, 0.8, 1.0]
 
 # USD-specific
-usd_up_axis: "Z"               # IFC uses Z-up
+usd_up_axis: "Y"               # Y-up: Isaac Sim / Omniverse / glTF standard
 usd_meters_per_unit: 1.0
+usd_double_sided: true         # Required for thin BIM walls (visible from both sides)

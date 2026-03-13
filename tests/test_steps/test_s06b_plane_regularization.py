@@ -1565,3 +1565,136 @@ class TestColumnDetection:
         columns, remaining = detect_columns(walls, scale=1.0, max_column_width=1.0)
         assert len(columns) == 0
         assert len(remaining) == 1
+
+
+# ---------------------------------------------------------------------------
+# N-point polyline support in step.py helpers
+# ---------------------------------------------------------------------------
+
+
+class TestPolylineTransformAndBoundary:
+    """Test _transform_walls_from_manhattan and _rebuild_wall_boundary with N-point polylines."""
+
+    def test_transform_walls_3point_with_rotation(self):
+        """3-point polyline center-line should produce 3 points in center_line_3d."""
+        from gss.steps.s06b_plane_regularization.step import _transform_walls_from_manhattan
+
+        R = np.eye(3)  # identity rotation
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [3, 0], [3, 4]],
+             "thickness": 0.2, "height_range": [0.0, 3.0],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        result = _transform_walls_from_manhattan(walls, R)
+        assert len(result) == 1
+        cl3d = result[0]["center_line_3d"]
+        assert len(cl3d) == 3
+        # With identity R, [x, y_mid, z] maps to itself
+        y_mid = 1.5
+        np.testing.assert_allclose(cl3d[0], [0.0, y_mid, 0.0])
+        np.testing.assert_allclose(cl3d[1], [3.0, y_mid, 0.0])
+        np.testing.assert_allclose(cl3d[2], [3.0, y_mid, 4.0])
+
+    def test_transform_walls_3point_with_90deg_rotation(self):
+        """3-point polyline with 90-degree rotation around Y axis."""
+        from gss.steps.s06b_plane_regularization.step import _transform_walls_from_manhattan
+
+        # 90-degree rotation around Y: X→Z, Z→-X
+        R = np.array([[0, 0, -1], [0, 1, 0], [1, 0, 0]], dtype=float)
+        walls = [
+            {"id": 0, "center_line_2d": [[1, 0], [1, 2], [3, 2]],
+             "thickness": 0.2, "height_range": [0.0, 4.0],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        result = _transform_walls_from_manhattan(walls, R)
+        cl3d = result[0]["center_line_3d"]
+        assert len(cl3d) == 3
+        # Each point should be rotated back by R^T
+        y_mid = 2.0
+        R_inv = R.T
+        expected_0 = R_inv @ np.array([1.0, y_mid, 0.0])
+        expected_1 = R_inv @ np.array([1.0, y_mid, 2.0])
+        expected_2 = R_inv @ np.array([3.0, y_mid, 2.0])
+        np.testing.assert_allclose(cl3d[0], expected_0.tolist(), atol=1e-10)
+        np.testing.assert_allclose(cl3d[1], expected_1.tolist(), atol=1e-10)
+        np.testing.assert_allclose(cl3d[2], expected_2.tolist(), atol=1e-10)
+
+    def test_transform_walls_2point_backward_compat(self):
+        """2-point walls should still work (backward compatibility)."""
+        from gss.steps.s06b_plane_regularization.step import _transform_walls_from_manhattan
+
+        R = np.eye(3)
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [5, 0]],
+             "thickness": 0.2, "height_range": [0.0, 3.0],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        result = _transform_walls_from_manhattan(walls, R)
+        cl3d = result[0]["center_line_3d"]
+        assert len(cl3d) == 2
+
+    def test_rebuild_boundary_3point_polyline(self):
+        """3-point polyline should produce strip boundary (3+3+1=7 points)."""
+        from gss.steps.s06b_plane_regularization.step import _rebuild_wall_boundary
+
+        plane = {"boundary_3d": np.empty((0, 3))}
+        wall = {
+            "center_line_2d": [[0, 0], [3, 0], [3, 4]],
+            "height_range": [0.0, 3.0],
+        }
+        _rebuild_wall_boundary(plane, wall)
+        bnd = plane["boundary_3d"]
+        # 3 bottom + 3 top (reversed) + 1 close = 7
+        assert bnd.shape == (7, 3)
+        # First point = first bottom
+        np.testing.assert_allclose(bnd[0], [0, 0, 0])
+        # Last point = closing (same as first)
+        np.testing.assert_allclose(bnd[-1], bnd[0])
+        # Check top edge is reversed
+        np.testing.assert_allclose(bnd[3], [3, 3, 4])  # last cl point at y_max
+        np.testing.assert_allclose(bnd[4], [3, 3, 0])  # middle cl point at y_max
+        np.testing.assert_allclose(bnd[5], [0, 3, 0])  # first cl point at y_max
+
+    def test_rebuild_boundary_2point_backward_compat(self):
+        """2-point wall should produce 5-point boundary (same as before)."""
+        from gss.steps.s06b_plane_regularization.step import _rebuild_wall_boundary
+
+        plane = {"boundary_3d": np.empty((0, 3))}
+        wall = {
+            "center_line_2d": [[0, 0], [5, 0]],
+            "height_range": [0.0, 3.0],
+        }
+        _rebuild_wall_boundary(plane, wall)
+        bnd = plane["boundary_3d"]
+        # 2 bottom + 2 top (reversed) + 1 close = 5
+        assert bnd.shape == (5, 3)
+        np.testing.assert_allclose(bnd[0], [0, 0, 0])
+        np.testing.assert_allclose(bnd[1], [5, 0, 0])
+        np.testing.assert_allclose(bnd[2], [5, 3, 0])
+        np.testing.assert_allclose(bnd[3], [0, 3, 0])
+        np.testing.assert_allclose(bnd[-1], bnd[0])
+
+    def test_no_rotation_path_3point(self):
+        """R=None path in step.py should also produce N-point center_line_3d."""
+        # Simulate the R=None code path inline
+        walls = [
+            {"id": 0, "center_line_2d": [[0, 0], [3, 0], [3, 4]],
+             "thickness": 0.2, "height_range": [0.0, 4.0],
+             "normal_axis": "z", "plane_ids": [1]},
+        ]
+        # This is the R=None logic from step.py
+        walls_output = []
+        for w in walls:
+            entry = dict(w)
+            cl = w["center_line_2d"]
+            y_mid = sum(w["height_range"]) / 2.0
+            entry["center_line_3d"] = [
+                [pt[0], y_mid, pt[1]] for pt in cl
+            ]
+            walls_output.append(entry)
+
+        cl3d = walls_output[0]["center_line_3d"]
+        assert len(cl3d) == 3
+        np.testing.assert_allclose(cl3d[0], [0, 2, 0])
+        np.testing.assert_allclose(cl3d[1], [3, 2, 0])
+        np.testing.assert_allclose(cl3d[2], [3, 2, 4])

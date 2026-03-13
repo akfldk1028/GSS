@@ -76,6 +76,11 @@ SCENES = {
         "type": "interior",
         "desc": "Playroom (실내, Deep Blending)",
     },
+    "jh": {
+        "ply": "data/raw/point_cloud_jh.ply",
+        "type": "interior",
+        "desc": "JH (실내, custom scan)",
+    },
 }
 
 

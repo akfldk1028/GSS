@@ -42,7 +42,10 @@ SYNTH_WALL_COLOR = [1.0, 0.5, 0.3]  # orange for synthetic walls
 
 
 def _deduplicate_walls(walls):
-    """Remove synthetic walls that overlap with detected walls."""
+    """Remove synthetic walls that overlap with detected walls.
+
+    Polyline walls (>2 points) are always kept — only 2-point walls are dedup targets.
+    """
     detected = [w for w in walls if not w.get("synthetic")]
     synthetic = [w for w in walls if w.get("synthetic")]
 
@@ -50,6 +53,7 @@ def _deduplicate_walls(walls):
     for sw in synthetic:
         s_cl = sw.get("center_line_2d")
         if not s_cl or len(s_cl) != 2:
+            # Polyline synthetic walls: always keep (no simple dedup)
             result.append(sw)
             continue
         s0, s1 = np.array(s_cl[0]), np.array(s_cl[1])
@@ -74,59 +78,68 @@ def _get_wall_quads_manhattan(walls, floor_h, ceil_h):
     """Build 3D wall quads from Manhattan center_line_2d (axis-aligned BIM coords).
 
     Manhattan space: X, Z = horizontal (room plan), Y = vertical (height).
-    center_line_2d = [[x1, z1], [x2, z2]] in Manhattan XZ plane.
-    Y axis is preserved by the Manhattan rotation, so floor_h/ceil_h work directly.
+    center_line_2d = [[x1, z1], ...] in Manhattan XZ plane.
+    Supports N-point polylines: generates one quad per segment.
     """
     quads = []
     for w in walls:
         cl = w.get("center_line_2d")
-        if not cl or len(cl) != 2:
+        if not cl or len(cl) < 2:
             continue
-        p0, p1 = cl[0], cl[1]
-        quad = np.array([
-            [p0[0], floor_h, p0[1]],
-            [p1[0], floor_h, p1[1]],
-            [p1[0], ceil_h, p1[1]],
-            [p0[0], ceil_h, p0[1]],
-        ])
         is_synth = w.get("synthetic", False)
-        quads.append((quad, is_synth, w["id"]))
+        for i in range(len(cl) - 1):
+            p0, p1 = cl[i], cl[i + 1]
+            quad = np.array([
+                [p0[0], floor_h, p0[1]],
+                [p1[0], floor_h, p1[1]],
+                [p1[0], ceil_h, p1[1]],
+                [p0[0], ceil_h, p0[1]],
+            ])
+            quads.append((quad, is_synth, w["id"]))
     return quads
 
 
 def _get_wall_quads_original(walls, floor_h, ceil_h):
-    """Build 3D wall quads from original center_line_3d."""
+    """Build 3D wall quads from original center_line_3d.
+
+    Supports N-point polylines: generates one quad per segment.
+    """
     quads = []
     for w in walls:
         cl3d = w.get("center_line_3d")
-        if cl3d and len(cl3d) == 2:
-            p0 = np.array(cl3d[0])
-            p1 = np.array(cl3d[1])
+        if not cl3d or len(cl3d) < 2:
+            continue
+        is_synth = w.get("synthetic", False)
+        for i in range(len(cl3d) - 1):
+            p0 = np.array(cl3d[i])
+            p1 = np.array(cl3d[i + 1])
             quad = np.array([
                 [p0[0], floor_h, p0[2]],
                 [p1[0], floor_h, p1[2]],
                 [p1[0], ceil_h, p1[2]],
                 [p0[0], ceil_h, p0[2]],
             ])
-            is_synth = w.get("synthetic", False)
             quads.append((quad, is_synth, w["id"]))
     return quads
 
 
 def _wall_corners_xz(walls, use_manhattan=True):
-    """Extract all wall endpoint XZ coordinates."""
+    """Extract all wall endpoint XZ coordinates.
+
+    Supports N-point polylines: collects all points.
+    """
     pts = []
     for w in walls:
         if use_manhattan:
             cl = w.get("center_line_2d")
-            if cl and len(cl) == 2:
-                pts.append(cl[0])
-                pts.append(cl[1])
+            if cl and len(cl) >= 2:
+                for pt in cl:
+                    pts.append(pt)
         else:
             cl3d = w.get("center_line_3d")
-            if cl3d and len(cl3d) == 2:
-                pts.append([cl3d[0][0], cl3d[0][2]])
-                pts.append([cl3d[1][0], cl3d[1][2]])
+            if cl3d and len(cl3d) >= 2:
+                for pt in cl3d:
+                    pts.append([pt[0], pt[2]])
     return np.array(pts) if pts else None
 
 

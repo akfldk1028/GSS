@@ -104,21 +104,20 @@ def _reproject_boundary(plane: dict) -> None:
 def _rebuild_wall_boundary(plane: dict, wall: dict) -> None:
     """Rebuild a wall's boundary_3d from its center-line + thickness + height.
 
-    Creates a 3D rectangle from the wall's center-line (XZ) and height (Y).
+    Supports N-point polyline center-lines: builds a strip with bottom edge
+    (forward along polyline) and top edge (reversed), then closes.
     """
     cl = wall["center_line_2d"]
-    p1 = np.array(cl[0])
-    p2 = np.array(cl[1])
     y_min, y_max = wall["height_range"]
 
-    # 3D rectangle: 4 corners + closing point
-    plane["boundary_3d"] = np.array([
-        [p1[0], y_min, p1[1]],
-        [p2[0], y_min, p2[1]],
-        [p2[0], y_max, p2[1]],
-        [p1[0], y_max, p1[1]],
-        [p1[0], y_min, p1[1]],
-    ])
+    # Bottom edge: all points at y_min, then top edge reversed at y_max
+    pts = []
+    for p in cl:
+        pts.append([p[0], y_min, p[1]])
+    for p in reversed(cl):
+        pts.append([p[0], y_max, p[1]])
+    pts.append(pts[0])  # close
+    plane["boundary_3d"] = np.array(pts)
 
 
 def _serialize_planes(planes: list[dict]) -> list[dict]:
@@ -252,26 +251,23 @@ def _transform_walls_from_manhattan(
     """Transform walls.json center-lines from Manhattan to original coordinates.
 
     Walls have center_line_2d in XZ plane of Manhattan space.
-    Convert to 3D, apply inverse rotation, return with center_line_3d.
+    Convert each point to 3D, apply inverse rotation, return with center_line_3d.
+    Supports N-point polyline center-lines.
     """
     R_inv = R.T
     result = []
     for w in walls:
         cl = w["center_line_2d"]
-        p1_xz, p2_xz = np.array(cl[0]), np.array(cl[1])
-        y_min, y_max = w["height_range"]
-        y_mid = (y_min + y_max) / 2.0
+        y_mid = sum(w["height_range"]) / 2.0
 
-        # 3D points in Manhattan space (Y-up): [x, y, z]
-        p1_3d = np.array([p1_xz[0], y_mid, p1_xz[1]])
-        p2_3d = np.array([p2_xz[0], y_mid, p2_xz[1]])
-
-        # Transform to original coordinates
-        p1_orig = R_inv @ p1_3d
-        p2_orig = R_inv @ p2_3d
+        cl_3d = []
+        for pt_xz in cl:
+            p_3d = np.array([pt_xz[0], y_mid, pt_xz[1]])
+            p_orig = R_inv @ p_3d
+            cl_3d.append(p_orig.tolist())
 
         entry = dict(w)
-        entry["center_line_3d"] = [p1_orig.tolist(), p2_orig.tolist()]
+        entry["center_line_3d"] = cl_3d
         result.append(entry)
     return result
 
@@ -557,8 +553,7 @@ class PlaneRegularizationStep(
                 cl = w["center_line_2d"]
                 y_mid = sum(w["height_range"]) / 2.0
                 entry["center_line_3d"] = [
-                    [cl[0][0], y_mid, cl[0][1]],
-                    [cl[1][0], y_mid, cl[1][1]],
+                    [pt[0], y_mid, pt[1]] for pt in cl
                 ]
                 walls_output.append(entry)
 

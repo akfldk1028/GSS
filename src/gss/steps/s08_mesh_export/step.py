@@ -108,6 +108,7 @@ class MeshExportStep(BaseStep[MeshExportInput, MeshExportOutput, MeshExportConfi
                     usd_path,
                     up_axis=self.config.usd_up_axis,
                     meters_per_unit=self.config.usd_meters_per_unit,
+                    double_sided=self.config.usd_double_sided,
                 )
 
                 # --- USDZ packaging ---
