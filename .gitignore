@@ -31,6 +31,8 @@ data/processed/**
 !data/processed/
 !data/processed/.gitkeep
 data/runs/
+data/kinect_live/
+data/realtime/
 
 # Clone repos (external, not submodules)
 clone/

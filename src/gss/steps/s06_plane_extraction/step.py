@@ -39,13 +39,11 @@ def _estimate_manhattan_frame(pcd) -> np.ndarray | None:
         return None
 
     # Make all normals point to the same hemisphere (consistent sign)
-    # We'll work with absolute directions, so map n -> n if n[max_component] > 0
+    # Flip each normal so the largest-magnitude component is positive
     abs_normals = normals.copy()
-    # For each normal, flip so the largest-magnitude component is positive
-    for i in range(len(abs_normals)):
-        max_idx = np.argmax(np.abs(abs_normals[i]))
-        if abs_normals[i, max_idx] < 0:
-            abs_normals[i] *= -1
+    max_idx = np.argmax(np.abs(abs_normals), axis=1)
+    signs = abs_normals[np.arange(len(abs_normals)), max_idx]
+    abs_normals[signs < 0] *= -1
 
     # --- Step 1: Find gravity (up) direction ---
     # Gravity direction = the axis with most normals close to it

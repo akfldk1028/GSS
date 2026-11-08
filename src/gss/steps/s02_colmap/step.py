@@ -84,11 +84,14 @@ class ColmapStep(BaseStep[ColmapInput, ColmapOutput, ColmapConfig]):
             pycolmap.CameraMode.SINGLE if self.config.single_camera else pycolmap.CameraMode.AUTO
         )
 
+        reader_options = pycolmap.ImageReaderOptions()
+        reader_options.camera_model = self.config.camera_model
+
         pycolmap.extract_features(
             database_path=str(database_path),
             image_path=str(inputs.frames_dir),
             camera_mode=camera_mode,
-            camera_model=self.config.camera_model,
+            reader_options=reader_options,
             extraction_options=extraction_options,
         )
 
@@ -103,9 +106,8 @@ class ColmapStep(BaseStep[ColmapInput, ColmapOutput, ColmapConfig]):
             )
         elif self.config.matcher == "exhaustive":
             pycolmap.match_exhaustive(database_path=str(database_path))
-        elif self.config.matcher == "vocab_tree":
+        else:
             pycolmap.match_exhaustive(database_path=str(database_path))
-            logger.warning("vocab_tree matcher not directly supported, using exhaustive")
 
         # 3. Incremental mapping
         logger.info("Running incremental mapping...")

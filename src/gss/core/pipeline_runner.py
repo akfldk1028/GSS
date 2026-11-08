@@ -47,6 +47,34 @@ def import_step_class(module_path: str):
     raise ImportError(f"No Step class found in {module_path}.step")
 
 
+def _resolve_step_input(
+    entry, results: dict[str, BaseModel], input_type: type[BaseModel],
+) -> dict:
+    """Resolve step input from upstream outputs without key collisions.
+
+    Strategy:
+    - Collect the set of field names the target input_type expects.
+    - For each dependency, only take fields that the input_type declares.
+    - If two dependencies provide the same field, the one listed later
+      in depends_on wins (explicit ordering = explicit priority).
+    """
+    if not entry.depends_on:
+        return {}
+
+    expected_fields = set(input_type.model_fields.keys())
+    input_data: dict = {}
+
+    for dep in entry.depends_on:
+        if dep not in results:
+            continue
+        dep_output = results[dep].model_dump()
+        for key, value in dep_output.items():
+            if key in expected_fields:
+                input_data[key] = value
+
+    return input_data
+
+
 def run_pipeline(config_path: Path) -> None:
     """Execute the full pipeline from a config file."""
     pipeline_cfg = load_pipeline_config(config_path)
@@ -63,13 +91,8 @@ def run_pipeline(config_path: Path) -> None:
         step_config = load_step_config(Path(entry.config_file), step_cls.config_type)
         step_instance = step_cls(config=step_config, data_root=data_root)
 
-        # Build input from previous step outputs or defaults
-        input_data = {}
-        if entry.depends_on:
-            for dep in entry.depends_on:
-                if dep in results:
-                    input_data.update(results[dep].model_dump())
-
+        # Build input from previous step outputs
+        input_data = _resolve_step_input(entry, results, step_cls.input_type)
         step_input = step_cls.input_type(**input_data) if input_data else step_cls.input_type()
         output = step_instance.execute(step_input)
         results[entry.name] = output

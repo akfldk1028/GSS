@@ -1,0 +1,5 @@
+threedgrut_repo: "clone/3dgrut"
+conda_env: "3dgrut"
+up_axis: "Y"
+meters_per_unit: 1.0
+generate_manifest: true

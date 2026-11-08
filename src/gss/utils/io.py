@@ -136,7 +136,7 @@ def read_colmap_points3d(sparse_dir: Path) -> np.ndarray:
 # ── PLY I/O ──────────────────────────────────────────────────────────
 
 def write_ply(path: Path, means: np.ndarray, colors: np.ndarray, opacities: np.ndarray) -> None:
-    """Write Gaussian parameters to PLY file."""
+    """Write Gaussian parameters to PLY file (vectorized binary write)."""
     n = len(means)
     header = (
         "ply\n"
@@ -151,13 +151,27 @@ def write_ply(path: Path, means: np.ndarray, colors: np.ndarray, opacities: np.n
         "property float opacity\n"
         "end_header\n"
     )
+
+    # Build structured array for single vectorized write
+    dtype = np.dtype([
+        ("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+        ("r", "u1"), ("g", "u1"), ("b", "u1"),
+        ("opacity", "<f4"),
+    ])
+    data = np.empty(n, dtype=dtype)
+    means_f32 = means.astype(np.float32)
+    data["x"] = means_f32[:, 0]
+    data["y"] = means_f32[:, 1]
+    data["z"] = means_f32[:, 2]
+    rgb = np.clip(colors * 255, 0, 255).astype(np.uint8)
+    data["r"] = rgb[:, 0]
+    data["g"] = rgb[:, 1]
+    data["b"] = rgb[:, 2]
+    data["opacity"] = opacities.astype(np.float32)
+
     with open(path, "wb") as f:
         f.write(header.encode())
-        for i in range(n):
-            f.write(struct.pack("<3f", *means[i]))
-            rgb = np.clip(colors[i] * 255, 0, 255).astype(np.uint8)
-            f.write(struct.pack("<3B", *rgb))
-            f.write(struct.pack("<f", opacities[i]))
+        data.tofile(f)
 
 
 def read_ply_points(path: Path) -> np.ndarray:

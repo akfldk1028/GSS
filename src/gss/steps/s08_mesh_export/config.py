@@ -36,6 +36,30 @@ class MeshExportConfig(BaseModel):
         default=[0.8, 0.8, 0.8, 1.0], description="Default color RGBA"
     )
 
+    # Isaac Sim USD export
+    export_isaac_usd: bool = Field(
+        False,
+        description="Export Isaac Sim-compatible USDC with physics (collision, rigid body)",
+    )
+    isaac_collision_approximation: Literal[
+        "meshSimplification", "convexDecomposition", "convexHull", "none"
+    ] = Field(
+        "meshSimplification",
+        description="Default collision approximation for Isaac USD meshes",
+    )
+    isaac_include_ground_plane: bool = Field(
+        True,
+        description="Include a ground plane with collision in Isaac USD",
+    )
+    isaac_collision_mesh_path: str | None = Field(
+        None,
+        description="Path to s05 surface_mesh.ply for TSDF-based collision mesh",
+    )
+    isaac_collision_face_target: int = Field(
+        20_000,
+        description="Target face count for decimated collision mesh",
+    )
+
     # USD-specific
     usd_up_axis: Literal["Y", "Z"] = Field(
         "Y",

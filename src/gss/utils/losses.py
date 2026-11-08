@@ -67,7 +67,7 @@ def ssim(
 def ssim_loss(
     rendered: torch.Tensor,
     gt: torch.Tensor,
-    lambda_ssim: float = 0.8,
+    lambda_ssim: float = 0.2,
 ) -> torch.Tensor:
     """Combined L1 + SSIM loss (original 3DGS paper formulation).
 
@@ -76,7 +76,7 @@ def ssim_loss(
     Args:
         rendered: (B, H, W, C) rendered image.
         gt: (B, H, W, C) ground truth image.
-        lambda_ssim: Weight for SSIM component (default 0.8 per paper).
+        lambda_ssim: Weight for SSIM component (default 0.2 per Kerbl et al. 2023).
 
     Returns:
         Scalar loss value.

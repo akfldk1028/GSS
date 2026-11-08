@@ -1,0 +1,68 @@
+project_name: "gss_hybrid"
+data_root: "./data"
+
+# Hybrid pipeline: BIM mesh (physics) + 3DGS USDZ (NuRec photorealistic rendering)
+# BIM path: s01→s02→s03→s04→s05→s06→s06b→s07→s08
+# 3DGS path: s09 (depends on s03 model_path only)
+
+steps:
+  - name: extract_frames
+    module: gss.steps.s01_extract_frames
+    config_file: configs/steps/s01_extract_frames.yaml
+    depends_on: []
+    enabled: true
+
+  - name: colmap
+    module: gss.steps.s02_colmap
+    config_file: configs/steps/s02_colmap.yaml
+    depends_on: [extract_frames]
+    enabled: true
+
+  - name: gaussian_splatting
+    module: gss.steps.s03_gaussian_splatting
+    config_file: configs/steps/s03_gaussian_splatting.yaml
+    depends_on: [extract_frames, colmap]
+    enabled: true
+
+  - name: depth_render
+    module: gss.steps.s04_depth_render
+    config_file: configs/steps/s04_depth_render.yaml
+    depends_on: [colmap, gaussian_splatting]
+    enabled: true
+
+  - name: tsdf_fusion
+    module: gss.steps.s05_tsdf_fusion
+    config_file: configs/steps/s05_tsdf_fusion.yaml
+    depends_on: [depth_render]
+    enabled: true
+
+  - name: plane_extraction
+    module: gss.steps.s06_plane_extraction
+    config_file: configs/steps/s06_plane_extraction.yaml
+    depends_on: [tsdf_fusion]
+    enabled: true
+
+  - name: plane_regularization
+    module: gss.steps.s06b_plane_regularization
+    config_file: configs/steps/s06b_plane_regularization.yaml
+    depends_on: [plane_extraction]
+    enabled: true
+
+  - name: ifc_export
+    module: gss.steps.s07_ifc_export
+    config_file: configs/steps/s07_ifc_export.yaml
+    depends_on: [plane_regularization]
+    enabled: true
+
+  - name: mesh_export
+    module: gss.steps.s08_mesh_export
+    config_file: configs/steps/s08_mesh_export.yaml
+    depends_on: [ifc_export]
+    enabled: true
+
+  # --- Hybrid: 3DGS → NuRec USDZ (parallel to BIM path) ---
+  - name: 3dgs_export
+    module: gss.steps.s09_3dgs_export
+    config_file: configs/steps/s09_3dgs_export.yaml
+    depends_on: [gaussian_splatting]
+    enabled: true

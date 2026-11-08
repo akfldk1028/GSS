@@ -72,6 +72,47 @@ def run_step(
 
 
 @app.command()
+def realtime(
+    config: Path = typer.Option(
+        Path("configs/realtime.yaml"), help="Realtime config path"
+    ),
+    cycle_interval: float = typer.Option(None, help="Override cycle interval (seconds)"),
+    device: int = typer.Option(None, help="Override camera device index"),
+    depth: bool = typer.Option(False, help="Use Azure Kinect depth camera"),
+    once: bool = typer.Option(False, help="Run single cycle then exit"),
+) -> None:
+    """Run real-time capture → 3DGS → USDZ pipeline."""
+    import yaml
+
+    setup_logging()
+    from gss.realtime.config import RealtimeConfig
+    from gss.realtime.orchestrator import RealtimeOrchestrator
+
+    if config.exists():
+        with open(config, encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+        rt_config = RealtimeConfig(**raw)
+    else:
+        console.print(f"[yellow]Config not found: {config}, using defaults[/yellow]")
+        rt_config = RealtimeConfig()
+
+    if cycle_interval is not None:
+        rt_config.cycle_interval_sec = cycle_interval
+    if device is not None:
+        rt_config.capture.device = device
+    if depth:
+        rt_config.capture.use_depth = True
+
+    console.print(f"[green]Realtime pipeline starting (cycle={rt_config.cycle_interval_sec}s)[/green]")
+    orch = RealtimeOrchestrator(rt_config)
+
+    if once:
+        orch.run_once()
+    else:
+        orch.run()
+
+
+@app.command()
 def info(config: Path = typer.Option(DEFAULT_CONFIG, help="Pipeline config path")) -> None:
     """Show pipeline steps and their status."""
     from gss.core.pipeline_runner import load_pipeline_config

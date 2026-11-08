@@ -1,0 +1,29 @@
+data_root: "data/realtime"
+cycle_interval_sec: 30.0
+min_frames_per_cycle: 10
+notify_isaac: true
+isaac_usdz_path: "/home/cgxr/Documents/DK/DTR/soarm_stack/assets/scenes/gss_realtime/scene.nurec.usdz"
+
+capture:
+  device: 0
+  width: 1280
+  height: 720
+  blur_threshold: 20.0
+  motion_threshold: 1.0
+  max_buffer_size: 50
+  use_depth: true
+  depth_voxel_size: 0.01
+
+trainer:
+  colmap_max_features: 2048
+  colmap_matcher: "sequential"
+  reuse_poses: true
+  threedgrut_repo: "clone/3dgrut"
+  threedgrut_conda_env: "3dgrut"
+  n_iterations: 3000  # 30K=full quality, 3K=fast realtime
+
+exporter:
+  threedgrut_repo: "clone/3dgrut"
+  conda_env: "3dgrut"
+  up_axis: "Y"
+  generate_manifest: true

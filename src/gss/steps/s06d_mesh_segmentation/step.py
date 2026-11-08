@@ -20,27 +20,11 @@ from typing import ClassVar
 import numpy as np
 
 from gss.core.step_base import BaseStep
+from gss.utils.plane_io import load_manhattan_rotation as _load_manhattan_rotation
 from .config import MeshSegmentationConfig
 from .contracts import MeshSegmentationInput, MeshSegmentationOutput
 
 logger = logging.getLogger(__name__)
-
-
-def _load_manhattan_rotation(s06_dir: Path) -> np.ndarray | None:
-    """Load Manhattan rotation matrix from s06 output."""
-    path = s06_dir / "manhattan_alignment.json"
-    if not path.exists():
-        return None
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        R = np.asarray(data["manhattan_rotation"], dtype=float)
-        if R.shape != (3, 3):
-            return None
-        return R
-    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as e:
-        logger.warning(f"Failed to load manhattan_alignment.json: {e}")
-        return None
 
 
 class MeshSegmentationStep(

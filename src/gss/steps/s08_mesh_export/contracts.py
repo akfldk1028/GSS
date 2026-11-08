@@ -14,6 +14,12 @@ class MeshExportOutput(BaseModel):
     glb_path: Optional[Path] = Field(None, description="Path to exported .glb file")
     usd_path: Optional[Path] = Field(None, description="Path to exported .usdc file")
     usdz_path: Optional[Path] = Field(None, description="Path to exported .usdz file")
+    isaac_usd_path: Optional[Path] = Field(
+        None, description="Path to exported .isaac.usdc file (Isaac Sim physics)"
+    )
+    scene_manifest_path: Optional[Path] = Field(
+        None, description="Path to scene_manifest.json"
+    )
     num_meshes: int = Field(0, description="Number of mesh elements exported")
     num_vertices: int = Field(0, description="Total vertex count across all meshes")
     num_faces: int = Field(0, description="Total face count across all meshes")

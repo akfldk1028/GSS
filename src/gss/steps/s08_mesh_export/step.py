@@ -9,6 +9,7 @@ Reads the IFC file from s07 and exports to:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import ClassVar
 
 from gss.core.step_base import BaseStep
@@ -81,6 +82,8 @@ class MeshExportStep(BaseStep[MeshExportInput, MeshExportOutput, MeshExportConfi
         glb_path = None
         usd_path = None
         usdz_path = None
+        isaac_usd_path = None
+        scene_manifest_path = None
 
         # --- GLB export ---
         if self.config.export_glb:
@@ -123,17 +126,64 @@ class MeshExportStep(BaseStep[MeshExportInput, MeshExportOutput, MeshExportConfi
                     "Install with: pip install usd-core"
                 )
 
+        # --- Isaac Sim USD export ---
+        if self.config.export_isaac_usd:
+            from ._usd_writer import _has_pxr
+
+            if _has_pxr():
+                from ._isaac_writer import (
+                    CollisionMeshConfig,
+                    write_isaac_usd,
+                    write_scene_manifest,
+                )
+
+                isaac_usd_path = output_dir / f"{stem}.isaac.usdc"
+
+                col_config = None
+                if self.config.isaac_collision_mesh_path:
+                    col_config = CollisionMeshConfig(
+                        collision_mesh_path=Path(self.config.isaac_collision_mesh_path),
+                        face_target=self.config.isaac_collision_face_target,
+                    )
+
+                write_isaac_usd(
+                    meshes,
+                    isaac_usd_path,
+                    up_axis=self.config.usd_up_axis,
+                    meters_per_unit=self.config.usd_meters_per_unit,
+                    double_sided=self.config.usd_double_sided,
+                    collision_approximation=self.config.isaac_collision_approximation,
+                    include_ground_plane=self.config.isaac_include_ground_plane,
+                    collision_config=col_config,
+                )
+
+                # Scene manifest
+                scene_manifest_path = output_dir / "scene_manifest.json"
+                write_scene_manifest(
+                    meshes,
+                    scene_manifest_path,
+                    up_axis=self.config.usd_up_axis,
+                )
+            else:
+                logger.warning(
+                    "usd-core not installed — skipping Isaac USD export. "
+                    "Install with: pip install usd-core"
+                )
+
         logger.info(
             f"Mesh export complete: "
             f"GLB={'yes' if glb_path else 'no'}, "
             f"USD={'yes' if usd_path else 'no'}, "
-            f"USDZ={'yes' if usdz_path else 'no'}"
+            f"USDZ={'yes' if usdz_path else 'no'}, "
+            f"Isaac={'yes' if isaac_usd_path else 'no'}"
         )
 
         return MeshExportOutput(
             glb_path=glb_path,
             usd_path=usd_path,
             usdz_path=usdz_path,
+            isaac_usd_path=isaac_usd_path,
+            scene_manifest_path=scene_manifest_path,
             num_meshes=num_meshes,
             num_vertices=num_vertices,
             num_faces=num_faces,

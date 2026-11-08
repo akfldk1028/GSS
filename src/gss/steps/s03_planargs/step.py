@@ -153,15 +153,21 @@ class PlanarGSStep(BaseStep[PlanarGSInput, PlanarGSOutput, PlanarGSConfig]):
             # Remove stale link
             if sys.platform == "win32":
                 # Junction removal: rmdir doesn't delete target contents
-                os.system(f'rmdir "{link_path}"')
+                os.rmdir(str(link_path))
             else:
                 link_path.unlink()
 
         if sys.platform == "win32":
             # NTFS junction: no admin privileges required
-            ret = os.system(f'mklink /J "{link_path}" "{target}"')
-            if ret != 0:
-                raise RuntimeError(f"Failed to create junction: {link_path} -> {target}")
+            import subprocess
+            result = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link_path), str(target)],
+                capture_output=True, text=True,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to create junction: {link_path} -> {target}: {result.stderr}"
+                )
         else:
             link_path.symlink_to(target)
 

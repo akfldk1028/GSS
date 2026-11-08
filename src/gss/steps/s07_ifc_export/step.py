@@ -23,11 +23,32 @@ from .contracts import IfcExportInput, IfcExportOutput
 logger = logging.getLogger(__name__)
 
 
-def _deduplicate_walls(walls: list[dict]) -> list[dict]:
+def _polyline_midpoint(cl: list[list[float]]) -> np.ndarray:
+    """Compute midpoint of an N-point polyline center-line."""
+    pts = np.array(cl)
+    if len(pts) == 1:
+        return pts[0]
+    # Weighted average by segment lengths
+    segments = np.diff(pts, axis=0)
+    lengths = np.linalg.norm(segments, axis=1)
+    total = lengths.sum()
+    if total < 1e-12:
+        return pts.mean(axis=0)
+    # Midpoint along the polyline at half total length
+    cumlen = np.cumsum(lengths)
+    half = total / 2.0
+    idx = np.searchsorted(cumlen, half)
+    idx = min(idx, len(segments) - 1)
+    overshoot = half - (cumlen[idx] - lengths[idx])
+    t = overshoot / max(lengths[idx], 1e-12)
+    return pts[idx] + t * segments[idx]
+
+
+def _deduplicate_walls(walls: list[dict], dedup_tolerance: float = 0.5) -> list[dict]:
     """Remove synthetic walls that overlap with detected walls.
 
-    A synthetic wall is considered duplicate if its center-line midpoint
-    is within 0.5 units of a detected wall's center-line midpoint.
+    Supports N-point polyline center-lines: compares midpoints and
+    total lengths for similarity.
     """
     detected = [w for w in walls if not w.get("synthetic")]
     synthetic = [w for w in walls if w.get("synthetic")]
@@ -35,20 +56,18 @@ def _deduplicate_walls(walls: list[dict]) -> list[dict]:
     result = list(detected)
     for sw in synthetic:
         s_cl = sw.get("center_line_2d")
-        if not s_cl or len(s_cl) != 2:
+        if not s_cl or len(s_cl) < 2:
             result.append(sw)
             continue
-        s0, s1 = np.array(s_cl[0]), np.array(s_cl[1])
+        s_mid = _polyline_midpoint(s_cl)
 
         is_dup = False
         for dw in detected:
             d_cl = dw.get("center_line_2d")
-            if not d_cl or len(d_cl) != 2:
+            if not d_cl or len(d_cl) < 2:
                 continue
-            d0, d1 = np.array(d_cl[0]), np.array(d_cl[1])
-            fwd = np.linalg.norm(s0 - d0) + np.linalg.norm(s1 - d1)
-            rev = np.linalg.norm(s0 - d1) + np.linalg.norm(s1 - d0)
-            if min(fwd, rev) < 0.5:
+            d_mid = _polyline_midpoint(d_cl)
+            if np.linalg.norm(s_mid - d_mid) < dedup_tolerance:
                 is_dup = True
                 break
         if is_dup:
