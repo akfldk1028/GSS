@@ -1,0 +1,29 @@
+교수님 발표용 슬라이드를 한국어로 만들어라. 배경은 흰색 기반으로 깔끔하게. 업로드한 실제 실험 이미지를 반드시 슬라이드에 포함시켜라. 발표 흐름은 다음과 같다.
+
+슬라이드1 표지: GSS - 카메라만으로 건물 BIM을 자동 생성하는 파이프라인. 부제: 3D Gaussian Splatting 기반 Scan-to-BIM 자동화.
+
+슬라이드2 문제 정의: 기존 Scan-to-BIM은 고가의 LiDAR 장비가 필요하고 수동 모델링에 의존한다. GSS는 일반 카메라 동영상만으로 BIM을 자동 생성한다. 비용과 시간을 획기적으로 줄인다.
+
+슬라이드3 관련 연구: PlanarGS가 NeurIPS 2025에서 co-planarity prior로 평면 품질 향상, Cloud2BIM이 Automation in Construction 2025에서 포인트클라우드에서 IFC 자동 변환으로 97.6퍼센트 벽 감지율 달성, Material-informed GS 2025가 재질 분류 방향 제시, Nature Scientific Reports 2026에서 3DGS와 BIM 통합 검증.
+
+슬라이드4 파이프라인 전체 구조: Video에서 Frame 추출, COLMAP으로 카메라 포즈 추정, 3D Gaussian Splatting으로 포인트 클라우드 생성, RANSAC으로 평면 추출, 기하 정규화로 벽 정렬, IFC BIM 생성, GLB와 USD 메시 내보내기. 총 10개 스텝 자동화.
+
+슬라이드5 3DGS 포인트 클라우드: all_gaussians_grid 이미지 사용. 가우시안 스플래팅이 건물 표면에 밀집하여 벽과 바닥과 천장 구조가 자연스럽게 드러난다. JH 데이터 80000개 포인트. LiDAR 없이 카메라만으로 생성.
+
+슬라이드6 RANSAC 평면 추출: jh_planes_isometric 이미지 사용. 무작위 3점으로 평면 방정식 생성, inlier 카운팅으로 최적 평면 선택, 법선 방향으로 벽과 바닥과 천장 분류, Alpha Shape으로 경계 폴리곤 생성.
+
+슬라이드7 기하 정규화 s06b: s06b_comparison 이미지 사용. 10개 서브모듈로 구성. 법선 스냅으로 Manhattan 축 정렬, 높이 클러스터링으로 바닥과 천장 통일, 벽 두께 추정으로 센터라인 도출, 교차점 트리밍으로 완벽한 코너, 공간 감지로 방 경계 자동 생성. 왼쪽은 RANSAC 원본이고 오른쪽이 정규화된 결과.
+
+슬라이드8 파이프라인 변환 과정: pipeline_flow_comparison 이미지 사용. 4개 베스트 씬에서 3DGS 포인트 클라우드가 평면 추출을 거쳐 BIM 모델로 변환되는 과정을 보여준다. JH와 DrJohnson과 Playroom과 Synthetic_L 모두 성공.
+
+슬라이드9 IFC BIM 출력: jh_ifc_isometric과 jh_bim_isometric 이미지 사용. IfcWall과 IfcSlab과 IfcSpace 계층 구조. IFC4 표준으로 Revit과 ArchiCAD 등에서 바로 열 수 있다.
+
+슬라이드10 L자 다각형 건물 검증: synthetic_L_building 이미지 사용. 합성 L자 포인트 클라우드로 비직교 건물도 정확히 감지함을 증명. 6벽 3바닥 3천장 3공간을 100퍼센트 자동 감지. Concave hull로 비정형 평면도 지원.
+
+슬라이드11 3DGS와 BIM 좌표 정합성 검증: 3dgs_vs_bim_comparison과 jh_overlay_closeup 이미지 사용. 포인트 클라우드를 IFC 좌표로 변환 후 BIM 와이어프레임과 오버레이. 가우시안 포인트가 BIM 박스 안에 정확히 위치함을 시각적으로 검증.
+
+슬라이드12 테스트와 검증 요약: 365개 유닛 테스트 전부 통과. s06b 정규화 94개, s07 IFC 56개, s08 메시 23개 등. 4개 베스트 씬에서 E2E 완벽 동작 확인.
+
+슬라이드13 타깃 플랫폼: NVIDIA Omniverse와 Isaac Sim은 USDC Y-up으로 로봇 시뮬레이션, Apple Vision Pro는 USDZ로 공간 컴퓨팅, UE5와 Unity는 GLB로 게임 엔진과 웹 뷰어.
+
+슬라이드14 향후 방향과 결론: Semantic Segmentation으로 문과 창 AI 감지, Material Classification으로 SAM2와 CLIP 기반 재질 분류, Isaac Sim 실제 로드 검증. GSS의 차별점은 카메라만으로 자동 BIM이고 E2E 자동화이고 크로스 플랫폼이다.

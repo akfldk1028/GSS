@@ -1,0 +1,141 @@
+교수님 발표 부록용 슬라이드 14장. 반드시 한국어. 배경은 흰색.
+청중: 건축/토목 교수와 대학원생 (컴퓨터비전 비전공). 대학원 세미나 수준.
+각 슬라이드에 핵심 수식 1-2개 + 직관적 다이어그램 + 원 논문 citation 반드시 포함.
+"surface"라는 키워드를 전체 슬라이드에서 반복 강조할 것.
+GSS는 3DGS가 아닌 2DGS(flat disk, surface reconstruction)를 사용한다는 점을 명확히 구분할 것.
+
+핵심 메시지: Gaussian Splatting 학습 과정에서 Gaussian들이 건물 표면(surface)에 자연스럽게 밀착한다. PLY 파일에서 Gaussian 중심 좌표(xyz)만 추출하면 그것이 곧 Surface Point Cloud이다. 별도의 surface reconstruction 없이 바로 RANSAC으로 건축 평면(벽/바닥/천장)을 추출할 수 있다.
+
+디자인 원칙:
+- 왼쪽: 알고리즘 핵심 (수식, pseudocode, 구조도)
+- 오른쪽: 직관적 해설 또는 시각적 다이어그램
+- 하단: 논문 reference (저자, 학회/저널, 연도)
+
+슬라이드1 표지:
+- 제목: GSS 핵심 알고리즘 해설
+- 부제: Video → 2DGS Surface → BIM 파이프라인의 수학적 기반
+- 하단: 발표 정보
+
+슬라이드2 Structure from Motion (SfM):
+- 핵심: 여러 사진에서 카메라 위치 역추적 + 희소 3D 점 복원
+- 수식: Essential Matrix E = [t]×R, 삼각측량 x = PX
+- 흐름: Feature Detection(SuperPoint) → Matching(SuperGlue) → Incremental SfM → Bundle Adjustment
+- 출력: camera poses {Ri, ti} + sparse point cloud X
+- Ref: Schönberger & Frahm, "Structure-from-Motion Revisited", CVPR 2016
+
+슬라이드3 2DGS Surface Reconstruction (★핵심 슬라이드):
+- 제목에 반드시 "2DGS"와 "Surface"를 명시
+- 3DGS vs 2DGS 비교:
+  - 3DGS: Gaussian = 3D 타원체 (부피 있음) → 표면을 관통하거나 떠 있을 수 있음 → noisy surface
+  - 2DGS: Gaussian = 2D flat disk (두께=0) → 표면에 딱 붙음 → clean surface reconstruction
+- GSS는 2DGS를 사용 (gsplat 2DGS mode)
+- 수식: G(x) = exp(-½(x-μ)ᵀΣ⁻¹(x-μ)), α-blending C = Σᵢ cᵢαᵢ∏ⱼ₌₁ⁱ⁻¹(1-αⱼ)
+- 학습 Loss: L = (1-λ)L₁ + λ·L_SSIM
+- Ref: Kerbl et al., SIGGRAPH 2023 / Huang et al., "2D Gaussian Splatting for Geometrically Accurate Radiance Fields", SIGGRAPH 2024
+
+슬라이드4 왜 Gaussian이 Surface에 모이는가 (★핵심 슬라이드):
+- 제목: "학습이 만드는 Surface Point Cloud"
+- 학습 과정 다이어그램:
+  1. Gaussian 렌더링 → 합성 이미지
+  2. 실제 사진과 비교 → Loss 계산
+  3. 경사 하강법 → Gaussian 위치(μ)가 실제 표면으로 이동
+  4. Adaptive Density Control: 허공의 투명한 Gaussian → 삭제
+- 핵심 논리: "사진에 보이는 것 = 표면. 사진과 일치하도록 학습하면 Gaussian들은 자연스럽게 표면 위에 밀집"
+- 허공에는 점이 거의 없음 (학습 중 삭제됨)
+- 결론: 학습이 끝난 Gaussian 집합 = Surface 표현
+
+슬라이드5 PLY에서 Surface Point Cloud 추출 (★핵심 슬라이드):
+- 제목: "PLY → Surface Point Cloud: 별도 reconstruction 불필요"
+- PLY 파일 구조: 각 Gaussian의 (위치, 크기, 방향, 색상, 불투명도)
+- 핵심 코드:
+  ```python
+  plydata = PlyData.read("model.ply")
+  points = np.stack([plydata["vertex"]["x"],
+                     plydata["vertex"]["y"],
+                     plydata["vertex"]["z"]], axis=1)
+  # → N개의 3D 점 = Surface Point Cloud
+  ```
+- 실제 데이터 예시: jh 데이터셋 ~80,000 Gaussian → 벽 30K + 바닥 15K + 천장 15K + 기타 20K
+- 핵심 강조: "Gaussian 중심 좌표(xyz)만 뽑으면 그것이 곧 surface points"
+- GSS 적용: s00_import_ply 스텝 (Import Pipeline)
+
+슬라이드6 RANSAC: Surface Points에서 건축 평면 추출:
+- 제목에 "Surface Points"를 명시
+- 입력: Surface Point Cloud (= Gaussian center positions)
+- pseudocode:
+  for i = 1 to N:
+    S ← random_sample(surface_points, 3)
+    plane ← fit_plane(S)  // ax + by + cz + d = 0
+    inliers ← {p : |nᵀp + d| < ε}
+    if |inliers| > best: best ← inliers
+- Sequential RANSAC: 추출 → 제거 → 반복 (바닥 15K → 천장 15K → 벽1 8K → 벽2 7K ...)
+- 법선 분류: |ny| > cos(θ) → 수평면(바닥/천장), else → 수직면(벽)
+- Ref: Fischler & Bolles, "Random Sample Consensus", CACM 1981
+
+슬라이드7 Alpha Shape 경계선 추출:
+- Convex Hull 한계 → Alpha Shape으로 해결 (L자 건물, 오목 형태)
+- Alpha Shape: Delaunay 삼각분할 → 반지름 > 1/α인 삼각형 제거
+- 벽: 3D surface points → 2D projection → alpha shape → boundary polygon
+- 바닥/천장: XZ projection → floor plan outline
+- Ref: Edelsbrunner et al., "Three-dimensional Alpha Shapes", ACM TOG 1994
+
+슬라이드8 Manhattan World 좌표 정렬:
+- 가정: 실내 구조물의 주요 surface는 3개 직교 방향으로 정렬
+- 법선 클러스터링 → 주성분 2개 → 회전 행렬 R
+- 좌표 변환: p_manhattan = R · p_original
+- 효과: 약간 기울어진 벽(2-5°) → 정확한 직교 좌표로 정렬
+- Ref: Coughlan & Yuille, "Manhattan World", ICCV 1999
+
+슬라이드9 기하 정규화 6단계:
+- Raw Surface Planes → Clean BIM Geometry
+- 파이프라인:
+  A. Normal Snap: 법선 → 가장 가까운 Manhattan 축
+  B. Height Clustering: 바닥/천장 Y값 통일
+  C. Wall Thickness: 평행 벽 쌍 → center-line 추출
+  C2. Wall Closure: 누락 벽 합성
+  D. Intersection Trim: 벽 끝점 → 코너 스냅
+  E. Space Detection: center-line → 방 경계
+- Ref: Nezerka et al., Automation in Construction, 2025 확장
+
+슬라이드10 스케일 추정:
+- 문제: SfM/2DGS 출력은 임의 스케일 (실제 미터가 아님)
+- 해결: floor surface - ceiling surface 거리 = expected 층고(2.7m)
+- 수식: scale = |y_ceiling - y_floor| / h_expected
+- 3단계 fallback: (1) floor-ceiling ΔY (2) wall Y-extent (3) XZ extent
+
+슬라이드11 IFC BIM 변환:
+- Surface에서 추출한 geometry → 건축 표준 BIM
+- IFC 계층: IfcProject → IfcSite → IfcBuilding → IfcBuildingStorey
+  ├─ IfcWall (center-line extrusion)
+  ├─ IfcSlab (boundary polygon)
+  └─ IfcSpace (방 경계)
+- 좌표 변환: Manhattan → IFC (X=mx/s, Y=mz/s, Z=my/s)
+- Ref: ISO 16739-1:2024
+
+슬라이드12 GLB/USD 메시 내보내기:
+- IFC → 디지털 트윈 플랫폼별 3D 포맷
+- GLB: 웹/게임엔진 (Three.js, Unity, UE5), Z-up → Y-up 변환
+- USD/USDC: NVIDIA Omniverse, Isaac Sim (로봇 시뮬레이션), PBR materials
+- USDZ: Apple Vision Pro, ARKit (공간 컴퓨팅)
+- Ref: Khronos "glTF 2.0", 2017 / Pixar "USD", SIGGRAPH 2019
+
+슬라이드13 전체 파이프라인 요약:
+- 흐름도 (반드시 "surface" 키워드 포함):
+  Video {I₁...Iₙ}
+  → SfM: cameras {Ri, ti} + sparse points
+  → 2DGS: Gaussian flat disks → surface에 밀착
+  → PLY: Gaussian center xyz = Surface Point Cloud
+  → RANSAC: surface points → 벽/바닥/천장 평면
+  → Regularization: 정규화 → walls, floors, spaces
+  → IFC BIM → GLB/USD Digital Twin
+- 하단 강조: "카메라 영상만으로 자동 BIM 생성 — LiDAR 불필요"
+- 하단 강조: "Gaussian이 곧 Surface — 별도 reconstruction 불필요"
+
+슬라이드14 Related Work 비교표:
+- | Method | Input | Surface Method | Output | LiDAR | Auto |
+  | Traditional Scan-to-BIM | Point Cloud | Manual | IFC | Required | Manual |
+  | Cloud2BIM (2025) | Point Cloud | RANSAC | IFC | Required | Auto |
+  | XGRIDS (2025) | 3DGS+SLAM | - | Revit | Optional | Semi |
+  | GBM (2025) | Google Earth | - | Mesh | No | Auto |
+  | GSS (Ours) | Video | 2DGS Surface→RANSAC | IFC+GLB+USD | No | Auto |
+- Key Refs: Cloud2BIM (Nezerka 2025), 3DGS (Kerbl 2023), 2DGS (Huang 2024), PlanarGS (Jiang 2025)

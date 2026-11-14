@@ -63,8 +63,10 @@ def run_pipeline(config_path: Path) -> None:
         step_config = load_step_config(Path(entry.config_file), step_cls.config_type)
         step_instance = step_cls(config=step_config, data_root=data_root)
 
-        # Build input from previous step outputs or defaults
+        # Build input from previous step outputs, initial_inputs, or defaults
         input_data = {}
+        if not entry.depends_on and pipeline_cfg.initial_inputs:
+            input_data.update(pipeline_cfg.initial_inputs)
         if entry.depends_on:
             for dep in entry.depends_on:
                 if dep in results:

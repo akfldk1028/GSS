@@ -1,0 +1,150 @@
+교수님 발표 부록용 슬라이드. 반드시 한국어. 배경은 흰색. 학술 발표 수준으로 작성하되 비전공자도 핵심을 이해할 수 있도록 구성. 각 슬라이드에 원 논문 citation을 반드시 포함. 비유만 나열하는 중학생 수준이 아니라, 핵심 수식/알고리즘을 보여주고 직관적으로 해설하는 방식.
+
+디자인 원칙:
+- 왼쪽: 알고리즘 핵심 (수식, pseudocode, 또는 구조도)
+- 오른쪽: 직관적 해설 또는 시각적 다이어그램
+- 하단: 논문 reference (저자, 학회/저널, 연도)
+- 폰트: 제목 28pt 이상, 본문 18pt 이상, reference 12pt
+
+슬라이드1 표지:
+- 제목: GSS 핵심 알고리즘 해설
+- 부제: Scan-to-BIM 파이프라인의 수학적 기반
+- 하단: 발표 정보
+
+슬라이드2 Structure from Motion (SfM):
+- 핵심: Epipolar Geometry + Bundle Adjustment
+- 수식: Essential Matrix E = [t]×R, 삼각측량 x = PX
+- 알고리즘 흐름: Feature Detection(SuperPoint) → Feature Matching(SuperGlue) → Incremental SfM → Bundle Adjustment
+- GSS 적용: hloc + COLMAP 파이프라인 (s01→s02)
+- 출력: camera poses {Ri, ti} + sparse point cloud X
+- Ref: Schönberger & Frahm, "Structure-from-Motion Revisited", CVPR 2016
+
+슬라이드3 3D Gaussian Splatting:
+- 핵심: Differentiable Rendering with Gaussian Primitives
+- 각 Gaussian: G(x) = exp(-½(x-μ)ᵀΣ⁻¹(x-μ))
+- 파라미터: position μ∈R³, covariance Σ∈R³ˣ³, opacity α, color (SH coefficients)
+- Rasterization: α-blending C = Σᵢ cᵢαᵢ∏ⱼ₌₁ⁱ⁻¹(1-αⱼ)
+- Loss: L = (1-λ)L₁ + λ·LSSIM
+- Adaptive Density Control: split large, clone small, prune transparent
+- GSS 적용: gsplat 2DGS mode (s03) — flat disk Gaussians for better surface
+- Ref: Kerbl et al., "3D Gaussian Splatting for Real-Time Radiance Field Rendering", SIGGRAPH 2023
+- Ref: Huang et al., "2D Gaussian Splatting for Surface Reconstruction", SIGGRAPH 2024
+
+슬라이드4 PlanarGS (선택적 경로):
+- 핵심: Co-planarity Prior로 평면 품질 향상
+- 기존 3DGS 문제: Gaussian이 표면에서 벗어남 → noisy planes
+- PlanarGS 해결: vision-language planar prior (SAM2 + feature clustering)
+- 평면 손실: Lplane = 1/|P| Σ|nᵀ(μᵢ - c)| (점-평면 거리 최소화)
+- GSS 적용: s03_planargs 스텝 (별도 conda 환경)
+- Ref: Jiang et al., "PlanarGS: Co-planarity Regularized Gaussian Splatting", NeurIPS 2025
+
+슬라이드5 RANSAC Plane Detection:
+- 핵심: Random Sample Consensus for Robust Estimation
+- 알고리즘 pseudocode:
+  ```
+  for i = 1 to N:
+    S ← random_sample(points, 3)
+    plane ← fit_plane(S)          // ax + by + cz + d = 0
+    inliers ← {p : |nᵀp + d| < ε}
+    if |inliers| > best: best ← inliers
+  return best_plane
+  ```
+- 반복 횟수: N = log(1-p)/log(1-wⁿ) where p=0.99, w=inlier ratio, n=3
+- Multi-plane: Sequential RANSAC (extract → remove → repeat)
+- 법선 기반 분류: |ny| > cos(θ) → horizontal (floor/ceiling), else → vertical (wall)
+- GSS 적용: Open3D segment_plane() (s06), min_points=1000, distance_threshold=0.02
+- Ref: Fischler & Bolles, "Random Sample Consensus", CACM 1981
+
+슬라이드6 Boundary Extraction (Alpha Shape):
+- 핵심: Concave Hull for Irregular Boundaries
+- Convex Hull 한계: L자 건물이나 오목한 형태 표현 불가
+- Alpha Shape: Delaunay 삼각분할 → 반지름 > 1/α인 삼각형 제거
+- α 파라미터: 작을수록 세밀 (α→0: convex hull, α→∞: point set)
+- GSS 적용: alphashape 라이브러리 + Shapely polygon (s06)
+- 벽: 3D points → 2D projection (along wall) → alpha shape → boundary polygon
+- 바닥/천장: XZ projection → alpha shape → floor plan outline
+- Ref: Edelsbrunner et al., "Three-dimensional Alpha Shapes", ACM TOG 1994
+
+슬라이드7 Manhattan World Assumption:
+- 핵심: Structural Regularity Prior for Indoor Scenes
+- 가정: 실내 구조물의 주요 표면은 3개 직교 방향으로 정렬
+- 주축 추정: 법선 벡터 클러스터링 → 주성분 2개 선택 → 회전 행렬 R 구성
+- 좌표 변환: p_manhattan = R · p_original
+- 효과: 약간 기울어진 벽(2-5°)을 정확한 직교 좌표로 정렬
+- 비-Manhattan 확장: normal_mode="cluster" → data-driven 축 발견 (oblique walls)
+- GSS 적용: s06b Module A (_snap_normals) — XZ plane에서 법선 클러스터링
+- Ref: Coughlan & Yuille, "Manhattan World: Compass Direction & Outline", ICCV 1999
+
+슬라이드8 Geometric Regularization Pipeline:
+- 핵심: Raw Planes → Clean BIM Geometry (6-stage pipeline)
+- 파이프라인 다이어그램 (왼→오른):
+  A. Normal Snap: n → nearest Manhattan axis (angular threshold 15°)
+  B. Height Clustering: DBSCAN on floor/ceiling Y-values → unified heights
+  C. Wall Thickness: parallel wall pairing (d₁-d₂ = thickness) → center-line extraction
+  C2. Wall Closure: floor boundary → synthesize missing walls (AABB/convex/concave hull)
+  D. Intersection Trim: wall endpoints → corner snapping (constrained to wall axis)
+  H2. Polyline Merge: collinear walls → N-point polyline center-lines
+  E. Space Detection: center-line polygonization → closed room boundaries
+- 각 단계 전후 비교 (before → after) 시각화 제시
+- GSS 적용: s06b (7 sub-modules, 94 unit tests)
+- Ref: Cloud2BIM 논문의 wall detection 접근법 확장, Nezerka et al. 2025
+
+슬라이드9 Scale Estimation:
+- 핵심: Metric Scale Recovery without Known References
+- 문제: SfM/3DGS 출력은 arbitrary scale (up to similarity transform)
+- 해결: floor-ceiling distance를 expected storey height(2.7m)와 비교
+- 수식: scale = |y_ceiling - y_floor| / h_expected
+- 3단계 fallback: (1) floor-ceiling ΔY (2) wall Y-extent (3) XZ extent
+- Coordinate: model_meters = model_units / scale
+- GSS 적용: s06b _snap_heights에서 자동 계산, s07 IFC에서 coordinate_scale로 적용
+
+슬라이드10 IFC Export — BIM Data Model:
+- 핵심: Parametric BIM from Detected Geometry
+- IFC 계층 구조 다이어그램:
+  IfcProject → IfcSite → IfcBuilding → IfcBuildingStorey
+    ├─ IfcWall (center-line extrusion, IfcArbitraryClosedProfileDef)
+    │   └─ IfcOpeningElement → IfcDoor/IfcWindow
+    ├─ IfcSlab (boundary polygon extrusion)
+    └─ IfcSpace (room volume from polygonized center-lines)
+- Center-line 기반 벽 생성: 양쪽 ±thickness/2 offset → closed polyline profile
+- 좌표 변환: Manhattan (mx, mz) → IFC (X=mx/s, Y=mz/s, Z=my/s)
+- GSS 적용: s07 (ifcopenshell), ISO 16739 준수
+- Ref: buildingSMART, "IFC4 ADD2 TC1", ISO 16739-1:2024
+
+슬라이드11 Mesh Export — Digital Twin Delivery:
+- 핵심: IFC → Cross-Platform 3D Formats
+- 변환 파이프라인: IFC → ifcopenshell.geom → triangulated mesh → GLB/USD
+- GLB (glTF Binary): 웹/게임엔진 (Three.js, Unity, UE5)
+  - Z-up → Y-up: (x,y,z) → (x,z,-y)
+- USD/USDC: NVIDIA Omniverse, Isaac Sim (로봇 시뮬레이션)
+  - PBR materials (UsdPreviewSurface), vertex normals, doubleSided
+- USDZ: Apple Vision Pro, ARKit (공간 컴퓨팅)
+- GSS 적용: s08 (trimesh + usd-core), graceful degradation
+- Ref: Khronos Group, "glTF 2.0 Specification", 2017
+- Ref: Pixar, "Universal Scene Description", SIGGRAPH 2019
+
+슬라이드12 전체 파이프라인 수학적 요약:
+- 입력: Video {I₁, ..., Iₙ}
+- SfM: {Iᵢ} → {Rᵢ, tᵢ}, X (cameras + sparse points)
+- 3DGS: X → {Gⱼ(μ, Σ, α, c)} (dense Gaussians)
+- Plane Detection: {Gⱼ} → {Πₖ: nₖᵀx + dₖ = 0} (RANSAC planes)
+- Regularization: {Πₖ} → {Wₘ, Fₗ, Cₗ, Sₚ} (walls, floors, ceilings, spaces)
+- BIM Export: → IFC (parametric) → GLB/USD (mesh)
+- 전체를 하나의 흐름도로 시각적 표현
+- 하단: "카메라 영상만으로 자동 BIM 생성 — LiDAR 불필요"
+
+슬라이드13 Related Work & Positioning:
+- 표: GSS vs 기존 방법 비교
+  | Method | Input | Output | LiDAR | Auto |
+  |--------|-------|--------|-------|------|
+  | Traditional Scan-to-BIM | Point Cloud | IFC | Required | Manual |
+  | Cloud2BIM (2025) | Point Cloud | IFC | Required | Auto |
+  | XGRIDS (2025) | 3DGS+SLAM | Revit | Optional | Semi |
+  | GBM (2025) | Google Earth | Mesh | No | Auto |
+  | **GSS (Ours)** | **Video** | **IFC+GLB+USD** | **No** | **Auto** |
+- Key References:
+  - Cloud2BIM: Nezerka et al., Automation in Construction, 2025
+  - 3DGS: Kerbl et al., SIGGRAPH 2023
+  - PlanarGS: Jiang et al., NeurIPS 2025
+  - 2DGS: Huang et al., SIGGRAPH 2024
+  - Integrating CAD/BIM/3DGS: Nature Scientific Reports, 2026

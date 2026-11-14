@@ -1,0 +1,7 @@
+method: "3dgut"
+config_name: "apps/colmap_3dgut"
+num_iterations: 30000
+export_ply: true
+export_usdz: true
+threedgrut_path: "clone/3dgrut"
+extra_args: []

@@ -1,6 +1,9 @@
 project_name: "gss_import"
 data_root: "./data"
 
+initial_inputs:
+  ply_path: "./data/raw/point_cloud_jh.ply"
+
 steps:
   - name: import_ply
     module: gss.steps.s00_import_ply

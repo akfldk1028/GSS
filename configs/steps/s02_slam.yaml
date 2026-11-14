@@ -1,0 +1,9 @@
+backend: "mast3r_slam"
+repo_path: "clone/MASt3R-SLAM"
+conda_env: "mast3r_slam"
+voxel_downsample: 0.02
+estimate_normals: true
+normal_radius: 0.1
+normal_max_nn: 30
+extra_args: []
+timeout: 7200

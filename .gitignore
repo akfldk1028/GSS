@@ -31,6 +31,8 @@ data/processed/**
 !data/processed/
 !data/processed/.gitkeep
 data/runs/
+data/jobs/
+data/uploads/
 
 # Clone repos (external, not submodules)
 clone/
@@ -61,6 +63,16 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# gRPC generated stubs
+server/grpc/generated/*_pb2*.py
+server/grpc/generated/*_pb2*.pyi
+
+# gRPC TLS certificates (never commit private keys)
+server/grpc/certs/*.key
+server/grpc/certs/*.crt
+server/grpc/certs/*.pem
+server/grpc/certs/*.csr
 
 # Jupyter
 .ipynb_checkpoints/

@@ -1,0 +1,23 @@
+services:
+  gss-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../data:/app/data
+      - ../configs:/app/configs
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - GSS_DATA_ROOT=/app/data
+      - GSS_JOBS_DIR=/app/data/jobs
+      - GSS_LOG_LEVEL=INFO
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

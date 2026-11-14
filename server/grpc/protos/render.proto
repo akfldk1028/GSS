@@ -1,0 +1,112 @@
+// GSS Render Service — real-time 3DGRUT rendering via gRPC.
+//
+// Inspired by NVIDIA NuRec gRPC protocol with GSS-specific extensions
+// for BIM pipeline integration and digital twin rendering.
+
+syntax = "proto3";
+
+package gss;
+
+import "common.proto";
+
+option java_package = "com.gss.grpc";
+
+// ─── Service ─────────────────────────────────────────────────────
+
+service GSSRenderService {
+    // Render a single RGB frame from the given camera pose.
+    rpc RenderRGB (RenderRequest) returns (RenderResponse);
+
+    // Load a trained 3DGRUT model into GPU memory.
+    rpc LoadModel (LoadModelRequest) returns (LoadModelResponse);
+
+    // Unload a model from GPU memory.
+    rpc UnloadModel (UnloadModelRequest) returns (UnloadModelResponse);
+
+    // List all currently loaded models.
+    rpc GetAvailableModels (Empty) returns (ModelsResponse);
+
+    // Get info about a loaded model (num gaussians, training config, etc.)
+    rpc GetModelInfo (ModelInfoRequest) returns (ModelInfoResponse);
+}
+
+// ─── Render ──────────────────────────────────────────────────────
+
+message CameraParams {
+    // 4x4 camera-to-world matrix, row-major (16 floats).
+    repeated float camera_to_world = 1;
+
+    // Intrinsics
+    float fx = 2;
+    float fy = 3;
+    float cx = 4;
+    float cy = 5;
+}
+
+enum ImageFormat {
+    JPEG = 0;
+    PNG = 1;
+    RAW_RGB = 2;  // Raw uint8 RGB bytes (width * height * 3)
+}
+
+message RenderRequest {
+    string model_id = 1;
+    uint32 width = 2;
+    uint32 height = 3;
+    CameraParams camera = 4;
+    ImageFormat format = 5;
+    uint32 jpeg_quality = 6;  // 1-100, only used when format=JPEG (default: 85)
+}
+
+message RenderResponse {
+    bytes image_data = 1;
+    float render_time_ms = 2;
+    bool success = 3;
+    string error = 4;
+    uint32 width = 5;
+    uint32 height = 6;
+}
+
+// ─── Model Management ────────────────────────────────────────────
+
+message LoadModelRequest {
+    string model_id = 1;          // Unique identifier for this model
+    string checkpoint_path = 2;   // Path to 3DGRUT checkpoint (.pt)
+}
+
+message LoadModelResponse {
+    bool success = 1;
+    string error = 2;
+    uint32 num_gaussians = 3;
+    float gpu_memory_mb = 4;      // Approximate GPU memory usage
+}
+
+message UnloadModelRequest {
+    string model_id = 1;
+}
+
+message UnloadModelResponse {
+    bool success = 1;
+    string error = 2;
+}
+
+message ModelsResponse {
+    repeated ModelInfo models = 1;
+}
+
+message ModelInfoRequest {
+    string model_id = 1;
+}
+
+message ModelInfoResponse {
+    bool found = 1;
+    ModelInfo info = 2;
+}
+
+message ModelInfo {
+    string model_id = 1;
+    string checkpoint_path = 2;
+    uint32 num_gaussians = 3;
+    float gpu_memory_mb = 4;
+    string method = 5;            // "3dgut" or "3dgrt"
+}

@@ -39,6 +39,7 @@ class PipelineConfig(BaseModel):
 
     project_name: str = "gss_project"
     data_root: Path = Path("./data")
+    initial_inputs: dict[str, Any] = Field(default_factory=dict)
     steps: list[StepEntry] = Field(default_factory=list)
 
 
